@@ -1,0 +1,41 @@
+{
+  "name": "browserbox",
+  "version": "1.0.0",
+  "description": "浏览器多开工具 - Windows 本地浏览器环境管理",
+  "main": "./out/main/index.js",
+  "author": "浏览器多开工具",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "pack:win": "npm run build && electron-builder --win --x64 --config electron-builder.yml"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/utils": "^4.0.0",
+    "element-plus": "^2.10.4",
+    "flag-icons": "^7.5.0",
+    "pinia": "^3.0.3",
+    "proxy-chain": "^2.5.1",
+    "rcedit": "^5.0.2",
+    "unzipper": "^0.12.3",
+    "vue": "^3.5.17",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^1.0.1",
+    "@types/node": "^22.16.5",
+    "@types/unzipper": "^0.10.11",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "electron": "^37.2.3",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^4.0.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vue-tsc": "^2.2.12"
+  }
+}

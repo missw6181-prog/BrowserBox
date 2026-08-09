@@ -1,0 +1,1838 @@
+BrowserBox V1.0 完整开发方案
+1. 项目名称
+BrowserBox
+2. 项目定位
+开发一款 Windows 本地浏览器环境管理工具。
+核心用途：
+管理多个独立浏览器环境
+每个环境独立浏览器 Profile
+每个环境独立 Cookie
+每个环境独立缓存
+每个环境独立 LocalStorage / IndexedDB / Session
+每个环境绑定独立代理
+支持 HTTP / HTTPS / SOCKS4 / SOCKS5 代理
+支持代理用户名和密码
+支持批量创建环境
+支持批量导入代理
+支持环境克隆
+支持环境导入/导出
+支持浏览器版本管理
+支持浏览器更新
+支持代理检测
+支持环境分组、标签、搜索
+支持同时运行多个浏览器环境
+本项目不是浏览器内核项目。
+不开发 Chromium 内核。
+不修改 Chromium 源码。
+浏览器使用官方 Chrome for Testing。
+ 
+⸻
+ 
+3. 技术栈
+3.1 操作系统
+Windows 10 / Windows 11 x64
+第一版本只支持 Windows。
+ 
+⸻
+ 
+3.2 桌面框架
+Electron
+ 
+⸻
+ 
+3.3 前端
+Vue 3
+TypeScript
+Vite
+UI：
+推荐 Element Plus。
+ 
+⸻
+ 
+3.4 后端
+Electron Main Process + Node.js
+所有文件、浏览器、代理、进程管理操作都在 Main Process 完成。
+Renderer 不允许直接访问文件系统。
+ 
+⸻
+ 
+3.5 数据存储
+第一版本不使用数据库。
+使用 JSON 文件。
+统一通过 ConfigManager 管理。
+禁止各模块自行读写 JSON。
+ 
+⸻
+ 
+4. 项目目录
+用户第一次运行软件时选择安装/数据目录。
+例如：
+D:\BrowserBox
+完整结构：
+D:\BrowserBox │ ├── BrowserBox.exe │ ├── Browser │   ├── 138 │   ├── 139 │   ├── 140 │   └── … │ ├── Profiles │   ├── env_xxxxxxxxx │   ├── env_xxxxxxxxx │   └── … │ ├── Config │   ├── settings.json │   ├── environments.json │   ├── proxies.json │   ├── groups.json │   └── tags.json │ ├── Downloads │ ├── Logs │   ├── app.log │   ├── proxy.log │   └── environments │ ├── Temp │ ├── Backup │ └── Extensions
+所有 BrowserBox 相关数据必须保存在用户指定目录。
+不能把 Profile、Cookie、代理配置等偷偷保存到：
+%APPDATA%
+%LOCALAPPDATA%
+桌面
+我的文档
+等其他位置。
+Electron 本身必要的系统级缓存除外，业务数据必须统一保存到用户指定的数据目录。
+ 
+⸻
+ 
+5. 浏览器内核
+使用官方 Chrome for Testing。
+不要使用用户系统安装的 Chrome。
+不要自己开发 Chromium。
+不要修改 Chromium 源码。
+BrowserBox 只负责：
+下载浏览器
+安装浏览器
+管理浏览器版本
+启动浏览器
+关闭浏览器
+管理 Profile
+ 
+⸻
+ 
+6. 浏览器版本管理
+目录：
+Browser/
+例如：
+Browser/
+139/
+140/
+141/
+每个版本都是完整的 Chrome for Testing。
+环境配置中保存：
+browserVersion
+例如：
+{ “browserVersion”: “140” }
+启动环境时：
+Browser/140/chrome.exe
+ 
+⸻
+ 
+7. 不使用 current 目录
+不要使用：
+Browser/current/
+避免浏览器版本切换导致环境状态不明确。
+每个环境明确指定浏览器版本。
+ 
+⸻
+ 
+8. 浏览器更新
+软件启动后检查更新。
+流程：
+启动 BrowserBox
+↓
+读取当前浏览器版本
+↓
+请求更新服务器
+↓
+获取最新版本
+↓
+如果有更新：
+提示用户
+当前版本：139
+最新版本：140
+↓
+用户点击更新
+↓
+下载 Chrome for Testing
+↓
+下载到：
+Temp/
+↓
+校验文件
+↓
+解压：
+Browser/140/
+↓
+验证 chrome.exe
+↓
+更新可用版本列表
+↓
+完成
+旧版本不能自动删除。
+必须允许用户保留旧版本。
+支持环境继续使用旧版本。
+ 
+⸻
+ 
+9. 浏览器版本回滚
+例如：
+环境001 使用 140。
+140 出现问题。
+用户可以编辑环境：
+浏览器版本：
+139
+保存。
+下次启动：
+Browser/139/chrome.exe
+ 
+⸻
+ 
+10. 环境 ID
+每个环境内部使用 UUID。
+例如：
+env_7d6f1f52-1b42-4b27-8d1a-xxxx
+同时拥有一个用户可读编号：
+001
+002
+003
+用户界面显示：
+001
+韩国001
+内部使用：
+UUID
+禁止把数字编号作为唯一数据库/文件标识。
+ 
+⸻
+ 
+11. 环境编号规则
+displayId：
+001
+002
+003
+…
+最多支持 999999。
+删除环境后：
+原编号默认不重复使用。
+例如：
+001 删除。
+新建：
+002
+不要自动重新占用 001。
+可以在高级设置中提供“重新整理编号”，但默认不改变历史编号。
+ 
+⸻
+ 
+12. Profile
+每个环境对应一个独立 Profile。
+例如：
+Profiles/
+env_7d6f1f52/
+env_8a4c3d91/
+启动：
+chrome.exe –user-data-dir=“D:\BrowserBox\Profiles\env_7d6f1f52”
+ 
+⸻
+ 
+13. Profile 保存内容
+Chrome 自动维护：
+Cookies
+History
+Bookmarks
+Cache
+LocalStorage
+IndexedDB
+Session
+Login Data
+Preferences
+Extensions
+Downloads
+Service Worker
+网站存储
+BrowserBox 不直接修改这些数据。
+BrowserBox 主要管理 Profile 目录。
+ 
+⸻
+ 
+14. Cookie
+Cookie 完全由 Chrome 管理。
+BrowserBox 不读取网站 Cookie。
+BrowserBox 不上传 Cookie。
+BrowserBox 不解析 Cookie。
+BrowserBox 不修改 Cookie。
+环境之间通过独立 Profile 实现 Cookie 隔离。
+ 
+⸻
+ 
+15. 环境配置
+Config/environments.json
+格式：
+[ { “id”: “env_xxxxx”, “displayId”: “001”, “name”: “韩国001”, “profilePath”: “Profiles/env_xxxxx”, “browserVersion”: “140”, “proxyId”: “proxy_xxxxx”, “groupId”: “group_xxxxx”, “tags”: [ “IG”, “韩国” ], “remark”: “测试环境”, “window”: { “width”: 1280, “height”: 900, “x”: 100, “y”: 100, “maximized”: false }, “createdAt”: “2026-08-09T00:00:00Z”, “updatedAt”: “2026-08-09T00:00:00Z” } ]
+ 
+⸻
+ 
+16. Proxy 管理
+代理与环境分离。
+不要把完整代理信息直接写入环境配置。
+环境只保存：
+proxyId
+例如：
+环境001
+↓
+proxy_001
+↓
+韩国 SOCKS5
+这样一个代理可以被多个环境引用。
+ 
+⸻
+ 
+17. 代理类型
+V1 支持：
+DIRECT
+HTTP
+HTTPS
+SOCKS4
+SOCKS5
+ 
+⸻
+ 
+18. 代理配置
+Config/proxies.json
+格式：
+[ { “id”: “proxy_xxxxx”, “name”: “韩国ISP001”, “type”: “socks5”, “host”: “1.2.3.4”, “port”: 1080, “username”: “username”, “password”: “encrypted-password”, “country”: “KR”, “city”: “Seoul”, “isp”: “”, “remark”: “”, “createdAt”: “2026-08-09T00:00:00Z”, “updatedAt”: “2026-08-09T00:00:00Z” } ]
+ 
+⸻
+ 
+19. 代理密码
+不要明文保存代理密码。
+密码使用本地加密。
+Windows 优先使用：
+DPAPI
+或者其他安全的本地密钥存储方式。
+不要把固定 AES 密钥直接写在源代码里。
+ 
+⸻
+ 
+20. 代理输入格式
+UI 支持：
+IP
+Port
+Username
+Password
+同时支持批量导入。
+ 
+⸻
+ 
+21. 批量代理导入
+支持：
+TXT
+CSV
+Excel（可选）
+支持自动识别：
+1.1.1.1:1080
+1.1.1.1:1080:user:pass
+http://1.1.1.1:8080
+
+http://user:pass@1.1.1.1:8080
+https://user:pass@1.1.1.1:8080
+socks4://1.1.1.1:1080
+socks4://user:pass@1.1.1.1:1080
+socks5://1.1.1.1:1080
+socks5://user:pass@1.1.1.1:1080
+导入时自动解析：
+type
+host
+port
+username
+password
+ 
+⸻
+ 
+22. 本地代理架构
+为了统一处理代理认证和代理类型，使用 Local Proxy Engine。
+结构：
+Chrome
+↓
+127.0.0.1:本地端口
+↓
+Local Proxy Engine
+↓
+上游代理
+↓
+Internet
+ 
+⸻
+ 
+23. 本地代理端口
+每个运行中的环境分配独立本地端口。
+例如：
+环境001：
+127.0.0.1:30001
+环境002：
+127.0.0.1:30002
+环境003：
+127.0.0.1:30003
+端口动态分配。
+不要写死。
+启动时从端口池中寻找可用端口。
+ 
+⸻
+ 
+24. Local Proxy 要求
+Local Proxy Engine 必须支持：
+HTTP
+HTTPS CONNECT
+SOCKS4
+SOCKS5
+SOCKS5 Username/Password
+HTTP Username/Password
+代理连接超时
+代理断线
+代理错误
+端口释放
+环境关闭自动停止
+ 
+⸻
+ 
+25. 不要自己重新实现成熟代理协议
+Local Proxy Engine 可以使用成熟的开源代理库。
+不要为了简单而重新实现完整 SOCKS5/HTTP Proxy 协议。
+重点是：
+BrowserBox 负责代理生命周期管理。
+代理库负责网络协议。
+ 
+⸻
+ 
+26. Chrome 连接代理
+Chrome 使用：
+127.0.0.1:30001
+而不是直接使用：
+user:pass@remote-ip:port
+这样统一由 Local Proxy Engine 管理上游认证。
+ 
+⸻
+ 
+27. 代理测试
+代理管理页面提供：
+“测试代理”
+测试：
+TCP 是否可连接
+代理认证是否成功
+出口 IP
+国家
+城市
+ASN
+ISP
+延迟
+IPv4
+IPv6
+DNS 信息
+测试完成显示：
+正常
+或者：
+失败
+并显示错误原因。
+ 
+⸻
+ 
+28. 代理测试安全
+测试出口 IP 时使用可靠的 IP 查询服务。
+不要把代理密码发送到第三方网站。
+代理认证只能在本地代理连接过程中使用。
+ 
+⸻
+ 
+29. 代理状态
+代理状态：
+未测试
+测试中
+正常
+认证失败
+连接失败
+超时
+未知错误
+ 
+⸻
+ 
+30. 环境状态
+环境状态：
+已停止
+启动中
+运行中
+停止中
+代理异常
+浏览器异常
+崩溃
+ 
+⸻
+ 
+31. 浏览器启动
+启动流程：
+点击“启动”
+↓
+读取环境配置
+↓
+检查 Profile
+↓
+检查浏览器版本
+↓
+读取代理配置
+↓
+启动 Local Proxy
+↓
+获取本地端口
+↓
+启动 Chrome
+↓
+传入：
+–user-data-dir
+↓
+传入本地代理配置
+↓
+记录 Chrome PID
+↓
+记录环境状态：
+运行中
+ 
+⸻
+ 
+32. 浏览器关闭
+用户点击关闭：
+↓
+关闭 Chrome
+↓
+等待进程退出
+↓
+停止 Local Proxy
+↓
+释放端口
+↓
+状态：
+已停止
+ 
+⸻
+ 
+33. 防止同一个环境重复启动
+每个环境必须使用：
+Windows Mutex
+或者可靠的进程锁。
+环境001已经运行：
+再次点击启动：
+提示：
+“环境001已经运行。”
+提供：
+“定位窗口”
+按钮。
+ 
+⸻
+ 
+34. 浏览器窗口编号
+浏览器窗口标题显示：
+【001】韩国001
+【002】韩国002
+【003】日本001
+窗口名称由：
+displayId + name
+组成。
+ 
+⸻
+ 
+35. 环境定位
+环境列表：
+001 韩国001 运行中
+点击：
+定位
+BrowserBox 找到该环境 Chrome HWND。
+调用 Windows API：
+SetForegroundWindow
+将对应浏览器窗口切换到最前。
+ 
+⸻
+ 
+36. 多窗口管理
+支持同时运行：
+5
+10
+20
+50
+100
+个环境。
+具体数量取决于用户电脑 CPU、RAM、磁盘和浏览器实际占用。
+BrowserBox 不限制固定数量。
+ 
+⸻
+ 
+37. 批量启动
+支持：
+选择多个环境
+点击：
+批量启动
+不要同时启动全部。
+使用启动队列：
+环境001
+等待 1 秒
+环境002
+等待 1 秒
+环境003
+…
+间隔可配置：
+500ms
+1000ms
+2000ms
+5000ms
+ 
+⸻
+ 
+38. 批量停止
+选择多个：
+批量关闭。
+按顺序关闭。
+ 
+⸻
+ 
+39. 批量删除
+删除前必须确认。
+提供：
+仅删除配置
+删除配置 + Profile
+删除配置 + Profile + 缓存
+默认：
+删除配置 + Profile
+ 
+⸻
+ 
+40. 环境克隆
+支持：
+右键环境
+↓
+克隆
+↓
+生成新环境
+例如：
+001 韩国001
+克隆后：
+002 韩国001-副本
+新环境必须拥有新的 UUID。
+新的 Profile 目录。
+代理可以：
+复制原代理引用
+或者：
+重新选择代理。
+ 
+⸻
+ 
+41. 环境导出
+支持导出：
+单个环境
+多个环境
+全部环境
+导出文件：
+.box
+内容：
+环境配置
+Profile
+必要的元数据
+注意：
+不要把代理密码以明文写入导出文件。
+ 
+⸻
+ 
+42. 环境导入
+选择：
+.box
+↓
+验证文件
+↓
+选择目标目录
+↓
+恢复 Profile
+↓
+恢复环境配置
+↓
+生成新的 UUID（如发生 ID 冲突）
+↓
+完成。
+ 
+⸻
+ 
+43. 备份
+支持：
+备份全部环境
+备份指定环境
+备份配置
+备份浏览器版本
+不建议每次备份都包含 Browser，因为浏览器体积大。
+ 
+⸻
+ 
+44. 缓存清理
+每个环境支持：
+“清理缓存”
+允许清理：
+Cache
+GPUCache
+Code Cache
+Media Cache
+其他明确属于缓存的数据。
+默认不能删除：
+Cookies
+Bookmarks
+History
+Login Data
+LocalStorage
+IndexedDB
+ 
+⸻
+ 
+45. 环境搜索
+支持：
+编号搜索
+名称搜索
+代理搜索
+国家搜索
+分组搜索
+标签搜索
+备注搜索
+ 
+⸻
+ 
+46. 环境排序
+支持：
+编号
+名称
+创建时间
+最后启动时间
+状态
+代理
+浏览器版本
+ 
+⸻
+ 
+47. 环境分组
+例如：
+IG
+Threads
+Facebook
+TikTok
+测试
+备用
+支持自定义分组。
+ 
+⸻
+ 
+48. 标签
+环境可以拥有多个标签。
+例如：
+韩国
+ISP
+IG
+主号
+测试
+标签可以筛选。
+ 
+⸻
+ 
+49. 备注
+环境支持自由文本备注。
+例如：
+“韩国测试环境”
+“IG主账号环境”
+“不要删除”
+ 
+⸻
+ 
+50. 窗口配置
+每个环境保存：
+width
+height
+x
+y
+maximized
+启动时恢复上一次窗口状态。
+ 
+⸻
+ 
+51. 下载目录
+每个环境可以：
+使用统一 Downloads
+或者：
+独立下载目录。
+默认：
+Downloads/
+env_xxxxx/
+ 
+⸻
+ 
+52. 扩展
+V1 支持 Chrome Extension。
+扩展属于 Profile。
+不同环境之间默认隔离。
+BrowserBox 提供：
+打开扩展目录
+启用/禁用扩展
+查看扩展
+V1 不开发扩展市场。
+ 
+⸻
+ 
+53. 日志
+日志目录：
+Logs/
+app.log
+proxy.log
+browser.log
+environments/
+env_xxxxx.log
+日志记录：
+环境创建
+环境删除
+环境启动
+环境关闭
+代理连接
+代理错误
+浏览器启动失败
+浏览器崩溃
+版本更新
+导入
+导出
+ 
+⸻
+ 
+54. 日志等级
+支持：
+INFO
+WARN
+ERROR
+DEBUG
+Release 默认：
+INFO
+开发环境：
+DEBUG
+ 
+⸻
+ 
+55. 崩溃恢复
+BrowserBox 异常退出后：
+重新打开 BrowserBox。
+检查上一次运行状态。
+提示：
+“发现 5 个环境上次处于运行状态，是否恢复？”
+按钮：
+恢复全部
+选择恢复
+不恢复
+ 
+⸻
+ 
+56. 配置安全
+所有 JSON 写入必须：
+先写临时文件。
+例如：
+environments.json.tmp
+写入完成。
+校验 JSON。
+然后：
+原子替换。
+避免软件突然崩溃造成 JSON 损坏。
+ 
+⸻
+ 
+57. ConfigManager
+所有配置操作必须统一通过：
+ConfigManager
+禁止：
+EnvironmentManager 自己 fs.readFile
+ProxyManager 自己 fs.writeFile
+UI 自己操作 JSON
+统一：
+ConfigManager.get()
+ConfigManager.set()
+ConfigManager.update()
+ConfigManager.save()
+ConfigManager.reload()
+ 
+⸻
+ 
+58. IPC 架构
+Renderer：
+只负责 UI。
+Main：
+负责：
+文件
+进程
+浏览器
+代理
+配置
+Windows API
+Renderer 与 Main：
+使用 Electron IPC。
+禁止 Renderer 使用：
+nodeIntegration
+ 
+⸻
+ 
+59. Electron 安全
+BrowserWindow：
+nodeIntegration: false
+contextIsolation: true
+sandbox: true（确认 Electron 版本和实现兼容后启用）
+
+使用 preload 暴露最小 API。
+禁止 Renderer 直接执行任意 Node.js。
+ 
+⸻
+ 
+60. UI
+主界面：
+BrowserBox
+顶部：
+新建环境
+批量创建
+代理管理
+浏览器管理
+导入
+导出
+更新
+设置
+ 
+⸻
+ 
+61. 环境列表
+表格：
+编号
+名称
+状态
+代理
+代理IP
+浏览器版本
+分组
+标签
+最后启动
+操作
+操作：
+启动
+关闭
+定位
+编辑
+克隆
+导出
+删除
+ 
+⸻
+ 
+62. 环境颜色
+可以给环境增加颜色标记：
+红
+黄
+绿
+蓝
+灰
+用于视觉区分。
+颜色只是 UI 信息，不修改浏览器。
+ 
+⸻
+ 
+63. 代理管理页面
+显示：
+代理名称
+类型
+IP
+端口
+国家
+城市
+ISP
+状态
+延迟
+绑定环境数量
+操作：
+测试
+编辑
+复制
+删除
+ 
+⸻
+ 
+64. 浏览器管理页面
+显示：
+版本
+安装状态
+大小
+发布时间
+使用环境数量
+操作：
+安装
+更新
+删除
+设置默认版本
+ 
+⸻
+ 
+65. 设置页面
+设置：
+数据目录
+默认浏览器版本
+启动间隔
+默认窗口大小
+日志级别
+自动检查更新
+自动下载浏览器
+主题
+语言
+ 
+⸻
+ 
+66. 第一次启动流程
+BrowserBox.exe
+↓
+选择数据目录
+↓
+创建目录
+↓
+检查 Browser
+↓
+没有浏览器：
+提示下载
+↓
+下载 Chrome for Testing
+↓
+安装
+↓
+进入主界面
+ 
+⸻
+ 
+67. 创建第一个环境
+点击：
+新建环境
+填写：
+名称：
+韩国001
+代理：
+选择代理
+浏览器：
+140
+窗口：
+1280x900
+点击：
+创建
+↓
+生成 UUID
+↓
+生成 displayId
+↓
+创建 Profile
+↓
+写入 environments.json
+↓
+完成。
+ 
+⸻
+ 
+68. 批量创建
+用户输入：
+数量：
+5
+名称前缀：
+韩国
+代理：
+按顺序分配
+结果：
+001 韩国001
+002 韩国002
+003 韩国003
+004 韩国004
+005 韩国005
+ 
+⸻
+ 
+69. 批量代理分配
+支持：
+按顺序
+随机
+指定代理
+代理组
+自动轮询
+例如：
+5 个环境
+3 个代理
+按顺序：
+环境001 → proxy001
+环境002 → proxy002
+环境003 → proxy003
+环境004 → proxy001
+环境005 → proxy002
+ 
+⸻
+ 
+70. 代理删除保护
+如果代理：
+proxy001
+当前被 5 个环境使用。
+删除时：
+提示：
+“该代理正在被 5 个环境使用。”
+提供：
+取消
+强制删除
+重新分配后删除
+默认：
+禁止直接删除。
+ 
+⸻
+ 
+71. 环境删除保护
+如果环境正在运行：
+禁止直接删除。
+必须：
+先关闭。
+ 
+⸻
+ 
+72. 浏览器版本删除保护
+如果 Browser/140 被环境使用：
+禁止删除。
+提示：
+“当前有 12 个环境正在使用此浏览器版本。”
+ 
+⸻
+ 
+73. 路径处理
+所有路径必须使用：
+path.join()
+禁止手工拼接：
+D:\BrowserBox...
+避免：
+Windows 路径错误。
+ 
+⸻
+ 
+74. 路径迁移
+如果用户把：
+D:\BrowserBox
+复制到：
+E:\BrowserBox
+软件启动时：
+自动重新计算所有相对路径。
+Config 内：
+只保存相对路径。
+例如：
+Profiles/env_xxxxx
+不要保存：
+D:\BrowserBox\Profiles\env_xxxxx
+这样整个目录可以移动。
+ 
+⸻
+ 
+75. 数据目录迁移
+设置：
+更改数据目录。
+流程：
+检查所有环境是否关闭。
+↓
+复制：
+Config
+Profiles
+Backup
+Downloads
+↓
+验证。
+↓
+切换数据目录。
+↓
+完成。
+ 
+⸻
+ 
+76. 程序升级与浏览器升级分离
+BrowserBox 本身升级：
+BrowserBox.exe
+浏览器升级：
+Browser/140
+两者互不影响。
+ 
+⸻
+ 
+77. 浏览器下载失败
+如果下载失败：
+保留旧版本。
+不要删除旧版本。
+提示：
+下载失败原因。
+允许重新下载。
+ 
+⸻
+ 
+78. 浏览器启动失败
+记录：
+浏览器路径
+命令行参数
+错误信息
+退出代码
+Profile
+代理端口
+方便调试。
+ 
+⸻
+ 
+79. 代理连接失败
+显示：
+代理连接失败。
+可能原因：
+认证失败
+IP不可达
+端口关闭
+超时
+DNS失败
+上游代理拒绝
+ 
+⸻
+ 
+80. 网络超时
+所有网络操作必须设置超时。
+不能无限等待。
+ 
+⸻
+ 
+81. 端口管理
+Local Proxy 端口：
+启动时动态分配。
+关闭时释放。
+软件崩溃后：
+重新启动时检查端口是否已经被占用。
+ 
+⸻
+ 
+82. 环境进程管理
+保存：
+Chrome PID
+LocalProxy PID / 运行实例 ID
+环境状态。
+BrowserBox 退出时：
+不要直接强制杀掉所有 Chrome。
+应该：
+先检测。
+然后由用户决定是否关闭。
+ 
+⸻
+ 
+83. 强制关闭
+提供：
+正常关闭
+强制关闭
+强制关闭必须二次确认。
+因为 Chrome 正在写 Profile 时强制结束可能造成数据损坏。
+ 
+⸻
+ 
+84. Profile 操作安全
+启动 Chrome 后：
+不要复制、移动或删除对应 Profile。
+必须：
+关闭 Chrome 后才能进行：
+克隆
+导出
+删除
+迁移
+备份
+ 
+⸻
+ 
+85. 数据一致性
+所有环境操作必须保证：
+Config
+Profile
+状态
+三者一致。
+如果发现：
+配置存在但 Profile 不存在。
+显示：
+“环境数据不完整。”
+提供：
+重新创建 Profile
+或者：
+删除环境。
+ 
+⸻
+ 
+86. 数据恢复
+启动时执行完整性检查：
+settings.json
+environments.json
+proxies.json
+groups.json
+tags.json
+如果 JSON 损坏：
+尝试从：
+Backup
+恢复。
+ 
+⸻
+ 
+87. 自动备份配置
+每次修改重要配置前：
+自动保存：
+Config/Backup/
+例如：
+environments_20260809_110000.json
+只保留最近 N 份。
+ 
+⸻
+ 
+88. 数据库
+V1：
+禁止使用数据库。
+原因：
+数据量不大
+本地工具
+迁移方便
+备份方便
+开发简单
+如果未来数据量和功能明显增长，再考虑 SQLite。
+ 
+⸻
+ 
+89. 性能目标
+启动 BrowserBox：
+尽量 < 2 秒。
+打开环境：
+主要取决于 Chrome。
+UI 不允许因为浏览器启动而卡死。
+所有进程操作使用异步。
+ 
+⸻
+ 
+90. 大量环境
+即使存在：
+500
+1000
+个环境。
+未启动的环境不能产生 Chrome 进程。
+UI 使用分页/虚拟列表。
+不要一次性渲染几千个复杂 DOM。
+ 
+⸻
+ 
+91. 批量测试代理
+例如：
+1000 个代理。
+使用并发线程池。
+默认：
+20 并发。
+允许设置：
+5
+10
+20
+50
+100
+ 
+⸻
+ 
+92. 代理测试结果缓存
+测试成功：
+保存：
+IP
+国家
+城市
+ISP
+延迟
+测试时间。
+一定时间内不重复测试。
+用户点击：
+重新测试
+才强制刷新。
+ 
+⸻
+ 
+93. 软件异常保护
+任何异常：
+不能导致：
+Profile 删除
+配置文件损坏
+浏览器版本删除
+代理配置丢失。
+重要操作必须：
+备份 → 操作 → 验证。
+ 
+⸻
+ 
+94. 开发模块
+项目结构：
+src/
+├── main/
+│   ├── index.ts │   │ │   ├── browser/ │   │   ├── BrowserManager.ts │   │   ├── BrowserVersionManager.ts │   │   └── BrowserProcess.ts │   │ │   ├── environment/ │   │   ├── EnvironmentManager.ts │   │   ├── EnvironmentProcess.ts │   │   └── EnvironmentLock.ts │   │ │   ├── proxy/ │   │   ├── ProxyManager.ts │   │   ├── ProxyTester.ts │   │   └── LocalProxyManager.ts │   │ │   ├── config/ │   │   ├── ConfigManager.ts │   │   └── ConfigValidator.ts │   │ │   ├── update/ │   │   ├── AppUpdater.ts │   │   └── BrowserUpdater.ts │   │ │   ├── backup/ │   │   └── BackupManager.ts │   │ │   └── logger/ │       └── Logger.ts │ ├── preload/ │   └── index.ts │ └── renderer/
+├── views/
+├── components/
+├── stores/
+├── services/
+└── types/
+ 
+⸻
+ 
+95. EnvironmentManager
+负责：
+创建环境
+删除环境
+修改环境
+克隆环境
+启动环境
+停止环境
+导入环境
+导出环境
+查询环境
+搜索环境
+ 
+⸻
+ 
+96. BrowserManager
+负责：
+查找浏览器
+安装浏览器
+启动浏览器
+停止浏览器
+获取版本
+检查版本
+管理版本
+删除版本
+ 
+⸻
+ 
+97. ProxyManager
+负责：
+创建代理
+删除代理
+修改代理
+查询代理
+批量导入
+代理测试
+代理分配
+代理引用关系
+ 
+⸻
+ 
+98.
+
+LocalProxyManager
+负责：
+创建本地代理实例
+分配本地端口
+绑定上游代理
+启动
+停止
+重连
+释放端口
+ 
+⸻
+ 
+99. ConfigManager
+负责：
+读取
+写入
+校验
+备份
+恢复
+原子更新
+迁移配置版本。
+ 
+⸻
+ 
+100. UpdateManager
+负责：
+检查版本
+下载
+校验
+安装
+回滚。
+ 
+⸻
+ 
+101. 配置版本
+settings.json 增加：
+configVersion
+例如：
+{ “configVersion”: 1 }
+未来升级：
+1 → 2
+通过 MigrationManager 自动迁移。
+ 
+⸻
+ 
+102. API 设计
+Renderer 不直接操作文件。
+通过 IPC：
+environment:list
+environment:create
+environment:update
+environment:delete
+environment:start
+environment:stop
+environment:clone
+environment:export
+environment:import
+environment:locate
+proxy:list
+proxy:create
+proxy:update
+proxy:delete
+proxy:test
+browser:list
+browser:checkUpdate
+browser:update
+browser:delete
+settings:get
+settings:update
+backup:create
+backup:restore
+ 
+⸻
+ 
+103. 错误处理
+统一错误格式：
+{ “code”: “PROXY_AUTH_FAILED”, “message”: “代理认证失败”, “details”: {} }
+错误码统一管理。
+例如：
+ENV_NOT_FOUND
+ENV_ALREADY_RUNNING
+ENV_PROFILE_MISSING
+BROWSER_NOT_FOUND
+BROWSER_VERSION_NOT_FOUND
+PROXY_NOT_FOUND
+PROXY_AUTH_FAILED
+PROXY_CONNECTION_FAILED
+PROXY_TIMEOUT
+PORT_UNAVAILABLE
+CONFIG_INVALID
+CONFIG_WRITE_FAILED
+IMPORT_INVALID
+EXPORT_FAILED
+ 
+⸻
+ 
+104. 安全原则
+BrowserBox 不收集网站账号密码。
+不上传 Cookie。
+不上传浏览器 Profile。
+不上传用户浏览数据。
+所有环境数据默认只保存在本地。
+代理密码只用于代理连接。
+ 
+⸻
+ 
+105. UI 第一版页面
+页面：
+环境管理
+代理管理
+浏览器管理
+备份/恢复
+设置
+ 
+⸻
+ 
+106. 环境管理页面
+顶部：
+新建环境
+批量创建
+导入
+搜索
+筛选
+批量启动
+批量关闭
+ 
+⸻
+ 
+107. 环境表格
+列：
+编号
+名称
+状态
+代理
+出口IP
+浏览器
+标签
+最后启动
+操作
+ 
+⸻
+ 
+108. 代理管理页面
+列：
+名称
+类型
+地址
+端口
+国家
+ISP
+状态
+延迟
+绑定环境
+操作
+ 
+⸻
+ 
+109. 浏览器管理页面
+列：
+版本
+状态
+大小
+安装时间
+使用环境
+操作
+ 
+⸻
+ 
+110. V1 开发阶段
+Phase 1
+完成：
+Electron
+Vue3
+项目结构
+安装目录
+ConfigManager
+基础 UI
+ 
+⸻
+ 
+Phase 2
+完成：
+Chrome for Testing
+BrowserManager
+浏览器安装
+浏览器启动
+ 
+⸻
+ 
+Phase 3
+完成：
+EnvironmentManager
+Profile
+环境创建
+环境删除
+环境启动
+环境关闭
+ 
+⸻
+ 
+Phase 4
+完成：
+ProxyManager
+HTTP
+HTTPS
+SOCKS4
+SOCKS5
+代理认证
+ 
+⸻
+ 
+Phase 5
+完成：
+批量导入
+批量创建
+环境克隆
+环境导入导出
+ 
+⸻
+ 
+Phase 6
+完成：
+浏览器更新
+代理测试
+日志
+备份恢复
+ 
+⸻
+ 
+Phase 7
+完成：
+异常恢复
+环境锁
+窗口定位
+启动队列
+缓存清理
+ 
+⸻
+ 
+111. 第一版必须完成
+以下功能不能省略：
+Chrome for Testing
+独立 Profile
+环境管理
+Cookie 隔离
+HTTP 代理
+HTTPS 代理
+SOCKS4
+SOCKS5
+用户名密码
+本地代理
+代理测试
+批量代理导入
+批量创建环境
+环境编号
+窗口标题
+窗口定位
+环境克隆
+环境导入
+环境导出
+浏览器版本管理
+浏览器更新
+JSON 配置
+无数据库
+用户指定数据目录
+日志
+环境锁
+ 
+⸻
+ 
+112. V1 不要过度开发
+第一版不要加入：
+指纹修改
+自动化
+云同步
+账号管理
+AI
+复杂插件系统
+团队系统
+支付系统
+这些全部放到后续版本。
+ 
+⸻
+ 
+113. 最终运行逻辑
+完整流程：
+用户安装 BrowserBox
+↓
+选择：
+D:\BrowserBox
+↓
+BrowserBox 创建目录
+↓
+检查 Chrome for Testing
+↓
+下载浏览器
+↓
+进入主界面
+↓
+添加代理
+↓
+测试代理
+↓
+创建环境
+↓
+选择代理
+↓
+选择浏览器版本
+↓
+创建独立 Profile
+↓
+点击启动
+↓
+启动 Local Proxy
+↓
+分配：
+127.0.0.1:30001
+↓
+启动 Chrome
+↓
+使用：
+Profiles/env_xxxxx
+↓
+Chrome 自动保存 Cookie 和浏览器数据
+↓
+用户关闭 Chrome
+↓
+BrowserBox 检测退出
+↓
+关闭 Local Proxy
+↓
+保存状态
+↓
+下一次启动：
+继续使用同一个 Profile
+↓
+Cookie 和登录状态仍然存在。
+ 
+⸻
+ 
+114. 最终产品结构
+BrowserBox
+=
+Electron/Vue 管理器
+● 
+Chrome for Testing
+● 
+独立 Profile
+● 
+Local Proxy Engine
+● 
+JSON 配置
+● 
+环境管理
+● 
+浏览器版本管理
+ 
+⸻
+ 
+115. 最终核心原则
+不开发浏览器内核。
+不修改 Chromium 源码。
+使用官方 Chrome for Testing。
+每个环境一个独立 Profile。
+Cookie 完全由 Chrome 管理。
+每个环境可以绑定不同代理。
+支持 HTTP/HTTPS/SOCKS4/SOCKS5。
+代理与环境配置分离。
+代理密码本地加密。
+不使用数据库。
+使用 JSON 保存配置。
+所有业务数据放用户指定目录。
+所有路径使用相对路径。
+浏览器版本可以多版本共存。
+环境可以指定浏览器版本。
+同一环境禁止重复启动。
+浏览器异常退出后支持恢复。
+支持批量创建。
+支持批量代理导入。
+支持环境克隆。
+支持环境导入/导出。
+支持代理测试。
+支持环境搜索、分组和标签。
+支持窗口定位。
+支持启动队列。
+支持日志。
+支持配置自动备份。
+支持浏览器版本更新和回滚。
+UI 与 Main Process 分离。
+所有重要操作必须保证数据一致性。
+ 
+⸻
+ 
+116. 给 AI 编程助手的开发要求
+请严格按照本方案开发 BrowserBox。
+开发原则：
+不要擅自增加数据库。
+不要把 Profile 保存到系统 AppData。
+不要依赖用户已经安装的 Chrome。
+不要修改 Chromium 源码。
+不要自己实现 Chromium。
+不要把 Cookie 单独复制出来管理。
+不要把代理密码明文写入配置。
+不要让 Renderer 直接访问 Node.js。
+不要让多个环境共享同一个 Profile。
+不要让同一个环境同时启动两个 Chrome。
+不要删除正在使用的浏览器版本。
+不要删除正在运行的环境。
+不要直接覆盖重要 JSON 文件，必须采用安全写入。
+所有模块必须职责单一。
+所有关键功能必须有错误处理和日志。
+代码必须使用 TypeScript。
+UI 使用 Vue3。
+Electron 主进程负责系统级操作。
+Renderer 只能通过 IPC 调用 Main Process API。
+第一阶段先实现基础功能，再逐步增加高级功能。
+开发顺序必须按照：
+项目初始化
+→ ConfigManager
+→ BrowserManager
+→ EnvironmentManager
+→ ProxyManager
+→ LocalProxyManager
+→ UI
+→ 批量操作
+→ 导入导出
+→ 更新系统
+→ 日志
+→ 备份恢复
+→ 异常处理
+→ 打包发布
+完成每个阶段后进行测试。
+不要一次性生成全部代码。
+每完成一个模块，先保证：
+TypeScript 编译通过
+Electron 可以启动
+核心功能可以运行
+再进入下一个模块。
+

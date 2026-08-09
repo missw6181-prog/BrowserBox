@@ -1,0 +1,44 @@
+productName: 浏览器多开工具
+directories:
+  buildResources: resources
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.*'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!bundled-browsers/**'
+  - '!scripts/*'
+extraResources:
+  - from: bundled-browsers
+    to: bundled-browsers
+    filter:
+      - '**/*'
+      - '!**/bb_*.exe'
+  - from: resources/icon.ico
+    to: icon.ico
+  - from: resources/icon.png
+    to: icon.png
+  - from: resources/icon.svg
+    to: icon.svg
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icon.ico
+  artifactName: ${productName}-${version}-Setup.${ext}
+nsis:
+  oneClick: false
+  # 默认/强制为所有用户安装（需管理员权限）
+  perMachine: true
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  shortcutName: 浏览器多开工具
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  include: resources/installer-custom.nsh
+  installerLanguages:
+    - zh_CN
+    - en_US
+appId: com.browserbox.app
+compression: maximum

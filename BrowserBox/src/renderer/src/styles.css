@@ -1,0 +1,27 @@
+:root {
+  --bb-bg: #f4f6f8;
+  --bb-panel: #ffffff;
+  --bb-text: #1f2937;
+  --bb-muted: #6b7280;
+  --bb-accent: #0f766e;
+  --bb-border: #e5e7eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  font-family: 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
+  background: var(--bb-bg);
+  color: var(--bb-text);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
