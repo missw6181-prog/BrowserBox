@@ -197,6 +197,22 @@ export function registerIpc(): void {
     }
   })
 
+  ipcMain.handle('environment:focus', async (_e, id: string) => {
+    try {
+      return ok(await environmentManager.focus(id))
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('environment:listRunning', async () => {
+    try {
+      return ok(environmentManager.listRunning())
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
   ipcMain.handle('environment:stopMany', async (_e, ids: string[], force?: boolean) => {
     try {
       return ok(await environmentManager.stopMany(ids, force))

@@ -362,6 +362,15 @@ async function stop(row: EnvRow): Promise<void> {
   }
 }
 
+async function focusEnv(row: EnvRow): Promise<void> {
+  try {
+    await invoke('environment:focus', row.id)
+    ElMessage.success(`已定位到 ${row.displayId}`)
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
 async function batchStart(): Promise<void> {
   if (!hasSelection.value) return
   const ids = [...selectedIds.value]
@@ -522,10 +531,18 @@ onUnmounted(() => {
       <el-table-column label="浏览器" min-width="160">
         <template #default="{ row }">{{ browserLabel(row.browserVersion) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="260" fixed="right">
+      <el-table-column label="操作" width="300" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" :disabled="row.status === 'running' || row.status === 'starting'" @click="start(row)">
             启动
+          </el-button>
+          <el-button
+            link
+            type="success"
+            :disabled="row.status !== 'running' && row.status !== 'starting'"
+            @click="focusEnv(row)"
+          >
+            定位
           </el-button>
           <el-button link type="warning" :disabled="row.status === 'stopped'" @click="stop(row)">关闭</el-button>
           <el-button link @click="openEdit(row)">编辑</el-button>

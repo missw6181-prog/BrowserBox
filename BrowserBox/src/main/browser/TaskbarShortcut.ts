@@ -417,21 +417,31 @@ function normalizeCmdPath(p: string): string {
   return p.replace(/\//g, '\\').toLowerCase()
 }
 
-/** 查找带指定 --user-data-dir 的浏览器相关 PID（含 bb_*.exe） */
-export async function findChromePidsByUserDataDir(userDataDir: string): Promise<number[]> {
+/**
+ * 查找绑定指定 user-data-dir 的浏览器进程。
+ * mainOnly=true 时只返回主进程（命令行不含 --type=），用于判断用户是否已关掉浏览器。
+ * 子进程（gpu/renderer 等）即使残留也不再把环境当成「仍在运行」。
+ */
+export async function findChromePidsByUserDataDir(
+  userDataDir: string,
+  opts?: { mainOnly?: boolean }
+): Promise<number[]> {
   const needle = normalizeCmdPath(userDataDir)
+  const mainOnly = opts?.mainOnly ? '1' : '0'
   const ps = `
 $ErrorActionPreference = 'SilentlyContinue'
 $needle = $env:BB_UD_NEEDLE
+$mainOnly = $env:BB_MAIN_ONLY -eq '1'
 Get-CimInstance Win32_Process | ForEach-Object {
   $name = $_.Name
   if (-not $name) { return }
   $n = $name.ToLower()
   if ($n -ne 'chrome.exe' -and -not $n.StartsWith('bb_')) { return }
-  if ($_.CommandLine) {
-    $cl = $_.CommandLine.ToLower().Replace('/','\\')
-    if ($cl.Contains($needle)) { $_.ProcessId }
-  }
+  if (-not $_.CommandLine) { return }
+  $cl = $_.CommandLine.ToLower().Replace('/','\\')
+  if (-not $cl.Contains($needle)) { return }
+  if ($mainOnly -and $cl.Contains('--type=')) { return }
+  $_.ProcessId
 }
 `
   try {
@@ -440,9 +450,9 @@ Get-CimInstance Win32_Process | ForEach-Object {
       ['-NoProfile', '-NonInteractive', '-Command', ps],
       {
         windowsHide: true,
-        timeout: 15000,
+        timeout: 12000,
         encoding: 'utf8',
-        env: { ...process.env, BB_UD_NEEDLE: needle }
+        env: { ...process.env, BB_UD_NEEDLE: needle, BB_MAIN_ONLY: mainOnly }
       }
     )
     return String(stdout)
@@ -460,11 +470,124 @@ export async function waitForChromePids(
 ): Promise<number[]> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
-    const pids = await findChromePidsByUserDataDir(userDataDir)
-    if (pids.length) return pids
+    // 启动阶段子进程可能先出现，主进程稍后就绪：先取全部，优先返回无 --type= 的
+    const mains = await findChromePidsByUserDataDir(userDataDir, { mainOnly: true })
+    if (mains.length) return mains
+    const any = await findChromePidsByUserDataDir(userDataDir)
+    if (any.length) return any
     await new Promise((r) => setTimeout(r, 300))
   }
   return []
+}
+
+/** 将指定环境的 Chrome 窗口恢复并置顶（按 user-data-dir 对应进程，不依赖窗口标题） */
+export async function focusEnvWindows(opts: {
+  displayId: string
+  name: string
+  userDataDir?: string
+}): Promise<number> {
+  if (!opts.userDataDir) return 0
+
+  // 窗口可能挂在主进程或其它 chrome 进程上，取该 profile 下全部相关 PID
+  let pids = await findChromePidsByUserDataDir(opts.userDataDir)
+  if (!pids.length) {
+    pids = await findChromePidsByUserDataDir(opts.userDataDir, { mainOnly: true })
+  }
+  if (!pids.length) {
+    logger.warn('environment', '定位失败：未找到进程', { displayId: opts.displayId, dir: opts.userDataDir })
+    return 0
+  }
+
+  const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public class BbFocus {
+  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lp);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+  public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+  public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
+  static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+  static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+  public static int FocusByPids(int[] pids) {
+    var set = new HashSet<uint>();
+    foreach (var p in pids) set.Add((uint)p);
+    var targets = new List<IntPtr>();
+    EnumWindows((hWnd, lp) => {
+      if (!IsWindowVisible(hWnd)) return true;
+      uint pid;
+      GetWindowThreadProcessId(hWnd, out pid);
+      if (!set.Contains(pid)) return true;
+      var cls = new StringBuilder(256);
+      GetClassName(hWnd, cls, 256);
+      var c = cls.ToString();
+      if (c.IndexOf("Chrome_WidgetWin_") != 0) return true;
+      // 只要有标题的顶层窗口（过滤掉无标题工具窗）
+      if (GetWindowTextLength(hWnd) <= 0) return true;
+      targets.Add(hWnd);
+      return true;
+    }, IntPtr.Zero);
+    int n = 0;
+    foreach (var hWnd in targets) {
+      if (IsIconic(hWnd)) ShowWindow(hWnd, 9); // SW_RESTORE
+      else ShowWindow(hWnd, 5); // SW_SHOW
+      uint fgProc;
+      var fg = GetForegroundWindow();
+      uint fgTid = GetWindowThreadProcessId(fg, out fgProc);
+      uint tgtProc;
+      uint tgtTid = GetWindowThreadProcessId(hWnd, out tgtProc);
+      uint cur = GetCurrentThreadId();
+      AttachThreadInput(cur, tgtTid, true);
+      if (fgTid != 0) AttachThreadInput(cur, fgTid, true);
+      BringWindowToTop(hWnd);
+      SetForegroundWindow(hWnd);
+      // 短暂 TOPMOST 再取消，提高置顶成功率
+      SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0040);
+      SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0040);
+      if (fgTid != 0) AttachThreadInput(cur, fgTid, false);
+      AttachThreadInput(cur, tgtTid, false);
+      n++;
+    }
+    return n;
+  }
+}
+"@
+$pids = @(${pids.join(',')})
+[BbFocus]::FocusByPids($pids)
+`
+  try {
+    const { stdout } = await execFileAsync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      {
+        windowsHide: true,
+        timeout: 12000,
+        encoding: 'utf8'
+      }
+    )
+    const n = parseInt(String(stdout).trim().split(/\r?\n/).pop() || '', 10)
+    logger.info('environment', `定位环境窗口 ${opts.displayId}`, { focused: n, pids })
+    return Number.isFinite(n) ? n : 0
+  } catch (err) {
+    logger.warn('environment', '定位环境窗口失败', { err: String(err), displayId: opts.displayId, pids })
+    return 0
+  }
 }
 
 export async function killChromeByUserDataDir(userDataDir: string, force = false): Promise<void> {

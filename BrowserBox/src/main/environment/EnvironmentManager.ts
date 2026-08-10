@@ -21,7 +21,8 @@ import {
   applyWindowIcons,
   writeEnvAppIcon,
   startIconWatcher,
-  stopIconWatcher
+  stopIconWatcher,
+  focusEnvWindows
 } from '../browser/TaskbarShortcut'
 import type { ChildProcess } from 'child_process'
 
@@ -79,6 +80,11 @@ function allocateDisplayId(existing: Environment[]): string {
 
 export class EnvironmentManager {
   private runtime = new Map<string, RuntimeState>()
+  private onRuntimeChange: (() => void) | null = null
+
+  setRuntimeChangeListener(fn: (() => void) | null): void {
+    this.onRuntimeChange = fn
+  }
 
   private shortcutsDir(): string {
     return configManager.resolvePath('Shortcuts')
@@ -92,8 +98,16 @@ export class EnvironmentManager {
   }
 
   private setRuntime(id: string, state: RuntimeState): void {
+    const prev = this.runtime.get(id)
     this.runtime.set(id, state)
     this.broadcastStatus(id, state.status, state.chromePid)
+    if (!prev || prev.status !== state.status) {
+      try {
+        this.onRuntimeChange?.()
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   /** 切换数据目录前清空运行态 */
@@ -377,27 +391,70 @@ export class EnvironmentManager {
       rt.watchTimer = undefined
     }
     let misses = 0
+    let checking = false
     const timer = setInterval(() => {
+      if (checking) return
+      checking = true
       void (async () => {
-        const pids = await findChromePidsByUserDataDir(profileAbs)
-        if (!pids.length) {
-          misses += 1
-          if (misses < 2) return
-          this.clearWatch(id)
-          await localProxyManager.stop(id)
-          this.setRuntime(id, { status: 'stopped' })
-          logger.info('environment', `Chrome 已退出 ${id}`)
-        } else {
-          misses = 0
-          const cur = this.runtime.get(id)
-          if (cur) {
-            this.setRuntime(id, { ...cur, chromePid: pids[0], status: 'running' })
+        try {
+          // 只看主进程：用户关掉窗口后主进程退出，残留 gpu/crashpad 不再误判为运行中
+          const mains = await findChromePidsByUserDataDir(profileAbs, { mainOnly: true })
+          if (!mains.length) {
+            misses += 1
+            if (misses < 2) return
+            this.clearWatch(id)
+            await localProxyManager.stop(id)
+            this.setRuntime(id, { status: 'stopped' })
+            logger.info('environment', `Chrome 已退出 ${id}`)
+          } else {
+            misses = 0
+            const cur = this.runtime.get(id)
+            if (cur && cur.status !== 'stopping') {
+              this.setRuntime(id, { ...cur, chromePid: mains[0], status: 'running' })
+            }
           }
+        } finally {
+          checking = false
         }
       })()
-    }, 2000)
+    }, 1500)
     const cur = this.runtime.get(id)
     if (cur) cur.watchTimer = timer
+  }
+
+  /** 将运行中的环境窗口置顶显示 */
+  async focus(id: string): Promise<{ focused: number }> {
+    const env = configManager.get('environments').find((e) => e.id === id)
+    if (!env) throw { code: ErrorCodes.ENV_NOT_FOUND, message: '环境不存在' }
+    const rt = this.runtime.get(id)
+    if (!rt || (rt.status !== 'running' && rt.status !== 'starting')) {
+      throw { code: ErrorCodes.ENV_NOT_FOUND, message: `环境${env.displayId}未在运行` }
+    }
+    const profileAbs = rt.profileAbs || configManager.resolvePath(env.profilePath)
+    const focused = await focusEnvWindows({
+      displayId: env.displayId,
+      name: env.name,
+      userDataDir: profileAbs
+    })
+    if (!focused) {
+      throw { code: ErrorCodes.ENV_NOT_FOUND, message: `未找到环境${env.displayId}的窗口，可能已关闭` }
+    }
+    return { focused }
+  }
+
+  listRunning(): Array<{ id: string; displayId: string; name: string; status: EnvironmentStatus }> {
+    return configManager
+      .get('environments')
+      .map((e) => {
+        const rt = this.runtime.get(e.id)
+        return {
+          id: e.id,
+          displayId: e.displayId,
+          name: e.name,
+          status: rt?.status || ('stopped' as EnvironmentStatus)
+        }
+      })
+      .filter((e) => e.status === 'running' || e.status === 'starting')
   }
 
   async start(id: string): Promise<void> {

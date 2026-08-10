@@ -50,6 +50,59 @@ function showMainWindow(): void {
   mainWindow.focus()
 }
 
+function buildTrayMenu(): Menu {
+  const running = (() => {
+    try {
+      return environmentManager.listRunning()
+    } catch {
+      return []
+    }
+  })()
+
+  const envItems: Electron.MenuItemConstructorOptions[] =
+    running.length === 0
+      ? [{ label: '（暂无运行中的环境）', enabled: false }]
+      : running.map((e) => ({
+          label: `定位 ${e.displayId} ${e.name}`,
+          click: () => {
+            void environmentManager.focus(e.id).catch((err) => {
+              logger.warn('app', '托盘定位环境失败', { id: e.id, err: String(err) })
+            })
+          }
+        }))
+
+  return Menu.buildFromTemplate([
+    {
+      label: '显示主窗口',
+      click: () => showMainWindow()
+    },
+    { type: 'separator' },
+    {
+      label: `运行中的环境 (${running.length})`,
+      enabled: false
+    },
+    ...envItems,
+    { type: 'separator' },
+    {
+      label: '退出（关闭所有环境）',
+      click: () => {
+        void quitApp()
+      }
+    }
+  ])
+}
+
+function refreshTrayMenu(): void {
+  if (!tray) return
+  try {
+    tray.setContextMenu(buildTrayMenu())
+    const n = environmentManager.listRunning().length
+    tray.setToolTip(n > 0 ? `浏览器多开工具（运行中 ${n}）` : '浏览器多开工具')
+  } catch {
+    /* ignore */
+  }
+}
+
 function createTray(): void {
   if (tray) return
   const icon = resolveAppIcon()
@@ -60,22 +113,9 @@ function createTray(): void {
   const trayIcon = icon.resize({ width: 32, height: 32 })
   tray = new Tray(trayIcon.isEmpty() ? icon : trayIcon)
   tray.setToolTip('浏览器多开工具')
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: '显示主窗口',
-        click: () => showMainWindow()
-      },
-      { type: 'separator' },
-      {
-        label: '退出（关闭所有环境）',
-        click: () => {
-          void quitApp()
-        }
-      }
-    ])
-  )
+  tray.setContextMenu(buildTrayMenu())
   tray.on('double-click', () => showMainWindow())
+  tray.on('right-click', () => refreshTrayMenu())
 }
 
 function minimizeToTray(win: BrowserWindow): void {
@@ -228,6 +268,7 @@ app.whenReady().then(async () => {
 
   createWindow()
   createTray()
+  environmentManager.setRuntimeChangeListener(() => refreshTrayMenu())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
