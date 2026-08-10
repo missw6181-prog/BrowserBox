@@ -2,13 +2,14 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '../services/api'
-import type { AppSettings } from '@shared/types'
+import type { AppSettings, CloseAction } from '@shared/types'
 
 const form = reactive({
   dataDir: '',
   defaultBrowserVersion: '',
   launchIntervalMs: 1000,
-  logLevel: 'INFO' as AppSettings['logLevel']
+  logLevel: 'INFO' as AppSettings['logLevel'],
+  closeAction: 'ask' as CloseAction
 })
 
 const preferredDataDir = ref('')
@@ -38,6 +39,7 @@ async function load(): Promise<void> {
   form.defaultBrowserVersion = s.defaultBrowserVersion
   form.launchIntervalMs = s.launchIntervalMs
   form.logLevel = s.logLevel
+  form.closeAction = s.closeAction || 'ask'
   dataDirMode.value = info.isDefault ? 'default' : 'custom'
   customDataDir.value = info.isDefault ? '' : info.dataDir
   browsers.value = await invoke('browser:list')
@@ -91,7 +93,8 @@ async function save(): Promise<void> {
     await invoke('settings:update', {
       defaultBrowserVersion: form.defaultBrowserVersion,
       launchIntervalMs: form.launchIntervalMs,
-      logLevel: form.logLevel
+      logLevel: form.logLevel,
+      closeAction: form.closeAction
     })
     ElMessage.success('已保存')
   } catch (e) {
@@ -128,6 +131,18 @@ onMounted(() => void load())
           <div class="hint">切换目录不会自动迁移旧数据，请自行备份或复制 Data 文件夹。</div>
         </div>
       </el-form-item>
+      <el-form-item label="关闭窗口时">
+        <div class="close-action">
+          <el-select v-model="form.closeAction" style="width: 100%">
+            <el-option label="每次询问（推荐）" value="ask" />
+            <el-option label="退出并关闭全部环境" value="quit" />
+            <el-option label="最小化到系统托盘" value="tray" />
+          </el-select>
+          <div class="hint">
+            未设置或选择「每次询问」时，点关闭会弹出确认框。选择另外两项后，关闭窗口将直接执行对应动作。
+          </div>
+        </div>
+      </el-form-item>
       <el-form-item label="默认浏览器">
         <el-select v-model="form.defaultBrowserVersion" clearable placeholder="自动选择" style="width: 100%">
           <el-option v-for="b in browsers" :key="b.id" :label="b.label" :value="b.id" />
@@ -155,7 +170,8 @@ onMounted(() => void load())
 h2 {
   margin: 0;
 }
-.data-dir {
+.data-dir,
+.close-action {
   width: 100%;
   display: flex;
   flex-direction: column;

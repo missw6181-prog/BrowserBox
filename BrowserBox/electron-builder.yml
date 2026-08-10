@@ -20,6 +20,12 @@ extraResources:
     to: icon.png
   - from: resources/icon.svg
     to: icon.svg
+  - from: resources/icon-env.ico
+    to: icon-env.ico
+  - from: resources/icon-env.png
+    to: icon-env.png
+  - from: resources/icon-env.svg
+    to: icon-env.svg
 win:
   target:
     - target: nsis

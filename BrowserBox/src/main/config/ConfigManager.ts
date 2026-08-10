@@ -127,6 +127,9 @@ export class ConfigManager {
     settings.dataDir = this.dataDir
     if (!settings.configVersion) settings.configVersion = 1
     if (!settings.nextDisplayId) settings.nextDisplayId = 1
+    if (!settings.closeAction || !['ask', 'quit', 'tray'].includes(settings.closeAction)) {
+      settings.closeAction = 'ask'
+    }
 
     this.store = {
       settings,

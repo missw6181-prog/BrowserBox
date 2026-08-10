@@ -42,18 +42,9 @@ function packIco(pngs) {
   return buf
 }
 
-app.whenReady().then(async () => {
-  const svg = readFileSync(join(root, 'resources', 'icon.svg'), 'utf8')
+async function renderSvgToPng512(win, svgPath) {
+  const svg = readFileSync(svgPath, 'utf8')
   const b64 = Buffer.from(svg, 'utf8').toString('base64')
-
-  const win = new BrowserWindow({
-    width: 64,
-    height: 64,
-    show: false,
-    webPreferences: { offscreen: true, contextIsolation: false }
-  })
-  await win.loadURL('data:text/html,<html><body></body></html>')
-
   const dataUrl = await win.webContents.executeJavaScript(`
     new Promise((resolve, reject) => {
       const size = 512
@@ -73,17 +64,37 @@ app.whenReady().then(async () => {
       img.src = 'data:image/svg+xml;base64,${b64}'
     })
   `)
+  return nativeImage.createFromDataURL(dataUrl).toPNG()
+}
 
-  const png512 = nativeImage.createFromDataURL(dataUrl).toPNG()
-  writeFileSync(join(root, 'resources', 'icon.png'), png512)
-
+function writePngAndIco(baseName, png512) {
+  writeFileSync(join(root, 'resources', `${baseName}.png`), png512)
   const base = nativeImage.createFromBuffer(png512)
   const sizes = [16, 24, 32, 48, 64, 128, 256]
   const pngs = sizes.map((size) => ({
     size,
     png: base.resize({ width: size, height: size, quality: 'best' }).toPNG()
   }))
-  writeFileSync(join(root, 'resources', 'icon.ico'), packIco(pngs))
-  console.log('OK transparent icon.png + icon.ico', png512.length)
+  writeFileSync(join(root, 'resources', `${baseName}.ico`), packIco(pngs))
+}
+
+app.whenReady().then(async () => {
+  const win = new BrowserWindow({
+    width: 64,
+    height: 64,
+    show: false,
+    webPreferences: { offscreen: true, contextIsolation: false }
+  })
+  await win.loadURL('data:text/html,<html><body></body></html>')
+
+  // 主程序：纯黑
+  const mainPng = await renderSvgToPng512(win, join(root, 'resources', 'icon.svg'))
+  writePngAndIco('icon', mainPng)
+
+  // 环境浏览器底图：蓝色，便于与主程序区分
+  const envPng = await renderSvgToPng512(win, join(root, 'resources', 'icon-env.svg'))
+  writePngAndIco('icon-env', envPng)
+
+  console.log('OK icon (black) + icon-env (blue)')
   app.quit()
 })

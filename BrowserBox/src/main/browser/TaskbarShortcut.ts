@@ -35,7 +35,7 @@ export function colorForDisplayId(displayId: string): string {
   return ENV_ICON_COLORS[idx % ENV_ICON_COLORS.length]
 }
 
-/** 应用图标源文件（优先透明 ICO） */
+/** 应用图标源文件（优先透明 ICO）— 主程序纯黑 */
 export function resolveAppIconFile(): string | null {
   const candidates = [
     process.resourcesPath ? join(process.resourcesPath, 'icon.ico') : '',
@@ -57,12 +57,35 @@ export function resolveAppIconFile(): string | null {
   return null
 }
 
+/** 环境浏览器任务栏底图：蓝色，与主程序黑色区分 */
+export function resolveEnvIconFile(): string | null {
+  const candidates = [
+    process.resourcesPath ? join(process.resourcesPath, 'icon-env.ico') : '',
+    process.resourcesPath ? join(process.resourcesPath, 'icon-env.png') : '',
+    join(__dirname, '../../resources/icon-env.ico'),
+    join(__dirname, '../../resources/icon-env.png'),
+    join(process.cwd(), 'resources/icon-env.ico'),
+    join(process.cwd(), 'resources/icon-env.png')
+  ]
+  try {
+    candidates.unshift(join(app.getAppPath(), 'resources/icon-env.png'))
+    candidates.unshift(join(app.getAppPath(), 'resources/icon-env.ico'))
+  } catch {
+    /* ignore */
+  }
+  for (const p of candidates) {
+    if (p && existsSync(p)) return p
+  }
+  // 回退到主图标，避免启动失败
+  return resolveAppIconFile()
+}
+
 /**
- * 写入环境任务栏图标：应用图标 + 顶部环境编号徽章。
+ * 写入环境任务栏图标：蓝色应用底图 + 顶部环境编号徽章。
  */
 export async function writeEnvAppIcon(filePath: string, displayId: string): Promise<void> {
-  const src = resolveAppIconFile()
-  if (!src) throw new Error('未找到应用图标 resources/icon.ico')
+  const src = resolveEnvIconFile()
+  if (!src) throw new Error('未找到环境图标 resources/icon-env.ico')
 
   mkdirSync(dirname(filePath), { recursive: true })
 

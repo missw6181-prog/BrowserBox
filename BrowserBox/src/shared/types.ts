@@ -20,6 +20,8 @@ export type EnvironmentStatus =
   | 'browser_error'
   | 'crashed'
 
+export type CloseAction = 'ask' | 'quit' | 'tray'
+
 export interface AppSettings {
   configVersion: number
   dataDir: string
@@ -32,6 +34,8 @@ export interface AppSettings {
   theme: 'light' | 'dark' | 'system'
   language: 'zh-CN' | 'en-US'
   nextDisplayId: number
+  /** 关闭主窗口默认动作：ask=每次询问，quit=退出并关环境，tray=最小化到托盘 */
+  closeAction: CloseAction
 }
 
 export interface WindowState {
@@ -134,6 +138,7 @@ export function createDefaultSettings(dataDir = ''): AppSettings {
     autoDownloadBrowser: true,
     theme: 'system',
     language: 'zh-CN',
-    nextDisplayId: 1
+    nextDisplayId: 1,
+    closeAction: 'ask'
   }
 }
