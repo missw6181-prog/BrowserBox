@@ -1,0 +1,11 @@
+.vscode/
+.idea/
+*.log
+.DS_Store
+
+# 本地数据与构建产物
+BrowserBox/Data/
+BrowserBox/dist/
+BrowserBox/out/
+BrowserBox/node_modules/
+BrowserBox/bundled-browsers/

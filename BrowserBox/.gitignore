@@ -6,3 +6,8 @@ bundled-browsers
 *.log
 .vscode
 .idea
+
+# 本地运行数据（环境/代理/设置，勿入库）
+Data/
+*.ico.bak
+tmp-*.js
