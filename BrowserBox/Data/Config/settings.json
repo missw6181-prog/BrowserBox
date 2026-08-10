@@ -1,0 +1,19 @@
+{
+  "configVersion": 1,
+  "dataDir": "C:\\Users\\Admin\\Desktop\\Chrome多开代理安装器\\BrowserBox\\Data",
+  "defaultBrowserVersion": "",
+  "launchIntervalMs": 1000,
+  "defaultWindow": {
+    "width": 1280,
+    "height": 900
+  },
+  "logLevel": "INFO",
+  "autoCheckUpdate": true,
+  "autoDownloadBrowser": true,
+  "theme": "system",
+  "language": "zh-CN",
+  "nextDisplayId": 1,
+  "closeAction": "ask",
+  "removedBrowserMajors": [],
+  "syncLocaleWithProxy": true
+}

@@ -12,6 +12,7 @@ import {
   getPreferredDataDir,
   writeBoot
 } from '../app/dataDir'
+import { ErrorCodes } from '../../shared/types'
 
 function ok<T>(data: T): { ok: true; data: T } {
   return { ok: true, data }
@@ -213,6 +214,22 @@ export function registerIpc(): void {
     }
   })
 
+  ipcMain.handle('environment:getFingerprint', async (_e, id: string) => {
+    try {
+      return ok(await environmentManager.getFingerprint(id))
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('environment:regenerateFingerprint', async (_e, id: string) => {
+    try {
+      return ok(environmentManager.regenerateFingerprint(id))
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
   ipcMain.handle('environment:stopMany', async (_e, ids: string[], force?: boolean) => {
     try {
       return ok(await environmentManager.stopMany(ids, force))
@@ -391,6 +408,35 @@ export function registerIpc(): void {
   ipcMain.handle('browser:setDefault', async (_e, version: string) => {
     try {
       return ok(configManager.updateSettings({ defaultBrowserVersion: version }))
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('browser:uninstall', async (_e, id: string) => {
+    try {
+      const key = String(id || '').trim()
+      const busy = environmentManager
+        .list()
+        .filter(
+          (e) =>
+            (e.status === 'running' || e.status === 'starting' || e.status === 'stopping') &&
+            (e.browserVersion === key ||
+              e.browserVersion === `${key}` ||
+              e.browserVersion.startsWith(`${key}.`))
+        )
+      if (busy.length) {
+        const names = busy
+          .slice(0, 5)
+          .map((e) => `${e.displayId}`)
+          .join('、')
+        throw {
+          code: ErrorCodes.ENV_ALREADY_RUNNING,
+          message: `有 ${busy.length} 个环境正在使用该浏览器（如 ${names}），请先关闭后再删除`
+        }
+      }
+      browserManager.uninstall(key)
+      return ok(true)
     } catch (err) {
       return fail(err)
     }

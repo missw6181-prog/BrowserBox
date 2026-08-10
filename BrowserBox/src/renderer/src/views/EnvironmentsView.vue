@@ -3,7 +3,8 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { TableInstance } from 'element-plus'
 import { invoke } from '../services/api'
-import type { Environment, EnvironmentStatus, ProxyConfig, ProxyType } from '@shared/types'
+import type { Environment, EnvironmentStatus, FingerprintProfile, FingerprintSnapshot, ProxyConfig, ProxyType } from '@shared/types'
+import { LANGUAGE_PRESETS } from '@shared/localePresets'
 import CountryFlag from '../components/CountryFlag.vue'
 import AppIcon from '../components/AppIcon.vue'
 
@@ -31,14 +32,57 @@ const form = reactive({
   name: '',
   proxyId: null as string | null,
   remark: '',
-  browserVersion: ''
+  browserVersion: '',
+  browserLang: '' as string,
+  randomFingerprint: true
 })
 const batchForm = reactive({
   count: 5,
   namePrefix: '环境',
   proxyIds: [] as string[],
   browserVersion: '',
-  remark: ''
+  remark: '',
+  browserLang: '' as string,
+  randomFingerprint: true
+})
+
+const fpDrawerVisible = ref(false)
+const fpLoading = ref(false)
+const fpLive = ref(false)
+const fpProxyCountry = ref('')
+const fpApplied = ref<{
+  country: string
+  lang: string
+  acceptLanguages: string
+  timezone: string
+  locale: string
+} | null>(null)
+const fpSnapshot = ref<FingerprintSnapshot | null>(null)
+const fpProfile = ref<FingerprintProfile | null>(null)
+const fpEnvLabel = ref('')
+const fpEnvId = ref('')
+const fpRegenBusy = ref(false)
+
+const fpEnvStopped = computed(() => {
+  const row = rows.value.find((r) => r.id === fpEnvId.value)
+  if (!row) return true
+  return row.status === 'stopped' || row.status === 'proxy_error' || row.status === 'browser_error' || row.status === 'crashed'
+})
+
+/** 创建时：简单伪装→简单，深度伪装→深度，未开随机指纹→没有使用 */
+const fpUsageLabel = computed(() => {
+  const row = rows.value.find((r) => r.id === fpEnvId.value)
+  if (!row || row.randomFingerprint === false || !row.fingerprint) return '没有使用'
+  if (row.fingerprintMode === 'cdp') return '深度'
+  if (row.fingerprintMode === 'ua') return '简单'
+  // 旧数据无快照：有档案则按当前设置推断
+  return '简单'
+})
+
+const fpUsageTagType = computed(() => {
+  if (fpUsageLabel.value === '深度') return 'warning'
+  if (fpUsageLabel.value === '简单') return 'success'
+  return 'info'
 })
 
 let statusTimer: ReturnType<typeof setInterval> | null = null
@@ -249,6 +293,8 @@ function resetForm(): void {
   form.proxyId = null
   form.remark = ''
   form.browserVersion = ''
+  form.browserLang = ''
+  form.randomFingerprint = true
 }
 
 function openCreate(): void {
@@ -262,6 +308,8 @@ function openBatchCreate(): void {
   batchForm.proxyIds = []
   batchForm.browserVersion = ''
   batchForm.remark = ''
+  batchForm.browserLang = ''
+  batchForm.randomFingerprint = true
   batchDialogVisible.value = true
 }
 
@@ -271,6 +319,7 @@ function openEdit(row: EnvRow): void {
   form.proxyId = row.proxyId
   form.remark = row.remark || ''
   form.browserVersion = row.browserVersion || ''
+  form.browserLang = row.browserLang || ''
   dialogVisible.value = true
 }
 
@@ -282,7 +331,8 @@ async function saveEnv(): Promise<void> {
         name: form.name || undefined,
         proxyId: form.proxyId,
         remark: form.remark,
-        browserVersion: form.browserVersion || undefined
+        browserVersion: form.browserVersion || undefined,
+        browserLang: form.browserLang || ''
       })
       ElMessage.success('已保存')
     } else {
@@ -290,7 +340,9 @@ async function saveEnv(): Promise<void> {
         name: form.name || undefined,
         proxyId: form.proxyId,
         remark: form.remark,
-        browserVersion: form.browserVersion || undefined
+        browserVersion: form.browserVersion || undefined,
+        browserLang: form.browserLang || '',
+        randomFingerprint: form.randomFingerprint
       })
       ElMessage.success('已创建')
       void refreshLatencies()
@@ -313,7 +365,9 @@ async function saveBatchCreate(): Promise<void> {
       namePrefix: String(batchForm.namePrefix || '环境'),
       proxyIds: [...batchForm.proxyIds],
       browserVersion: batchForm.browserVersion || undefined,
-      remark: batchForm.remark || undefined
+      remark: batchForm.remark || undefined,
+      browserLang: batchForm.browserLang || '',
+      randomFingerprint: batchForm.randomFingerprint
     })
     ElMessage.success(`已批量创建 ${list.length} 个环境`)
     batchDialogVisible.value = false
@@ -368,6 +422,62 @@ async function focusEnv(row: EnvRow): Promise<void> {
     ElMessage.success(`已定位到 ${row.displayId}`)
   } catch (e) {
     ElMessage.error((e as Error).message)
+  }
+}
+
+async function loadFingerprint(envId: string): Promise<void> {
+  fpLoading.value = true
+  try {
+    const res = await invoke<{
+      live: boolean
+      snapshot: FingerprintSnapshot | null
+      profile: FingerprintProfile | null
+      proxyCountry: string
+      appliedRegion: {
+        country: string
+        lang: string
+        acceptLanguages: string
+        timezone: string
+        locale: string
+      } | null
+    }>('environment:getFingerprint', envId)
+    fpLive.value = res.live
+    fpSnapshot.value = res.snapshot
+    fpProfile.value = res.profile
+    fpProxyCountry.value = res.proxyCountry || ''
+    fpApplied.value = res.appliedRegion
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  } finally {
+    fpLoading.value = false
+  }
+}
+
+async function openFingerprint(row: EnvRow): Promise<void> {
+  fpEnvId.value = row.id
+  fpEnvLabel.value = `${row.displayId} ${row.name}`
+  fpDrawerVisible.value = true
+  fpSnapshot.value = row.lastFingerprint || null
+  fpProfile.value = row.fingerprint || null
+  fpLive.value = false
+  fpProxyCountry.value = proxyCountry(row.proxyId) || ''
+  fpApplied.value = null
+  await loadFingerprint(row.id)
+}
+
+async function regenerateFingerprint(): Promise<void> {
+  if (!fpEnvId.value || !fpEnvStopped.value) return
+  fpRegenBusy.value = true
+  try {
+    const env = await invoke<Environment>('environment:regenerateFingerprint', fpEnvId.value)
+    fpProfile.value = env.fingerprint || null
+    fpSnapshot.value = null
+    await refresh(true)
+    ElMessage.success('已重新随机指纹，下次启动生效')
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  } finally {
+    fpRegenBusy.value = false
   }
 }
 
@@ -465,6 +575,7 @@ onUnmounted(() => {
       <div>
         <h2>环境管理</h2>
         <p v-if="hasSelection" class="sub">已选 {{ selectedIds.length }} 个</p>
+        <p v-else class="sub">创建时自动随机轻量硬件指纹；行内「指纹」可查看档案与采集结果，语言/时区见「设置 → 地区语言同步」。</p>
       </div>
       <div class="actions">
         <el-button :loading="latencyRefreshing" @click="refreshLatencies">刷新延迟</el-button>
@@ -531,7 +642,12 @@ onUnmounted(() => {
       <el-table-column label="浏览器" min-width="160">
         <template #default="{ row }">{{ browserLabel(row.browserVersion) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="300" fixed="right">
+      <el-table-column label="语言" width="110">
+        <template #default="{ row }">
+          {{ LANGUAGE_PRESETS.find((p) => p.id === row.browserLang)?.label?.split(' ')[0] || '自动' }}
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="390" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" :disabled="row.status === 'running' || row.status === 'starting'" @click="start(row)">
             启动
@@ -545,6 +661,7 @@ onUnmounted(() => {
             定位
           </el-button>
           <el-button link type="warning" :disabled="row.status === 'stopped'" @click="stop(row)">关闭</el-button>
+          <el-button link type="primary" @click="openFingerprint(row)">指纹</el-button>
           <el-button link @click="openEdit(row)">编辑</el-button>
           <el-button link type="danger" @click="remove(row)">删除</el-button>
         </template>
@@ -576,8 +693,22 @@ onUnmounted(() => {
             />
           </el-select>
         </el-form-item>
+        <el-form-item label="浏览器语言">
+          <el-select v-model="form.browserLang" clearable placeholder="自动（跟随代理国家 / 系统）" style="width: 100%">
+            <el-option
+              v-for="p in LANGUAGE_PRESETS"
+              :key="p.id"
+              :label="p.label"
+              :value="p.id"
+            />
+          </el-select>
+          <div class="hint">单独指定后优先于「设置 → 地区语言同步」；时区仍优先跟代理国家。</div>
+        </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.remark" type="textarea" />
+        </el-form-item>
+        <el-form-item v-if="!isEdit" label="随机浏览器指纹">
+          <el-switch v-model="form.randomFingerprint" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -622,8 +753,21 @@ onUnmounted(() => {
             />
           </el-select>
         </el-form-item>
+        <el-form-item label="浏览器语言">
+          <el-select v-model="batchForm.browserLang" clearable placeholder="自动（跟随代理国家 / 系统）" style="width: 100%">
+            <el-option
+              v-for="p in LANGUAGE_PRESETS"
+              :key="p.id"
+              :label="p.label"
+              :value="p.id"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="batchForm.remark" type="textarea" />
+        </el-form-item>
+        <el-form-item label="随机浏览器指纹">
+          <el-switch v-model="batchForm.randomFingerprint" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -631,6 +775,89 @@ onUnmounted(() => {
         <el-button type="primary" :loading="saving" @click="saveBatchCreate">创建</el-button>
       </template>
     </el-dialog>
+
+    <el-drawer v-model="fpDrawerVisible" :title="`指纹 · ${fpEnvLabel}`" size="460px" destroy-on-close>
+      <div class="fp-toolbar">
+        <el-tag :type="fpUsageTagType" size="small">{{ fpUsageLabel }}</el-tag>
+        <el-tag :type="fpLive ? 'success' : 'info'" size="small">
+          {{ fpLive ? '实时采集' : '缓存 / 未运行' }}
+        </el-tag>
+        <el-button size="small" :loading="fpLoading" @click="loadFingerprint(fpEnvId)">刷新</el-button>
+        <el-button
+          size="small"
+          type="warning"
+          plain
+          :disabled="!fpEnvStopped"
+          :loading="fpRegenBusy"
+          @click="regenerateFingerprint"
+        >
+          重新随机指纹
+        </el-button>
+      </div>
+
+      <el-descriptions v-if="fpProfile" title="伪装档案" :column="1" border size="small" class="fp-block">
+        <el-descriptions-item label="生成时间">{{ fpProfile.generatedAt }}</el-descriptions-item>
+        <el-descriptions-item label="seed">
+          <span class="fp-mono">{{ fpProfile.seed }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="User-Agent">
+          <span class="fp-mono">{{ fpProfile.userAgent }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="platform">{{ fpProfile.platform }}</el-descriptions-item>
+        <el-descriptions-item label="languages">{{ fpProfile.languages?.join(', ') }}</el-descriptions-item>
+        <el-descriptions-item label="CPU 并发">{{ fpProfile.hardwareConcurrency }}</el-descriptions-item>
+        <el-descriptions-item label="deviceMemory">{{ fpProfile.deviceMemory }}</el-descriptions-item>
+        <el-descriptions-item label="屏幕">
+          {{ fpProfile.screen.width }}×{{ fpProfile.screen.height }}
+          · {{ fpProfile.screen.colorDepth }}bit
+          · DPR {{ fpProfile.screen.pixelRatio }}
+        </el-descriptions-item>
+        <el-descriptions-item label="WebGL Vendor">{{ fpProfile.webglVendor }}</el-descriptions-item>
+        <el-descriptions-item label="WebGL Renderer">{{ fpProfile.webglRenderer }}</el-descriptions-item>
+      </el-descriptions>
+
+      <el-descriptions v-if="fpProxyCountry || fpApplied" title="地区对照" :column="1" border size="small" class="fp-block">
+        <el-descriptions-item label="代理国家">
+          <CountryFlag v-if="fpProxyCountry" :code="fpProxyCountry" size="sm" />
+          <span v-else>—</span>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="fpApplied" label="已应用语言">{{ fpApplied.lang }}</el-descriptions-item>
+        <el-descriptions-item v-if="fpApplied" label="Accept-Language">{{ fpApplied.acceptLanguages }}</el-descriptions-item>
+        <el-descriptions-item v-if="fpApplied" label="目标时区">{{ fpApplied.timezone }}</el-descriptions-item>
+        <el-descriptions-item v-if="fpApplied" label="目标 Locale">{{ fpApplied.locale }}</el-descriptions-item>
+      </el-descriptions>
+
+      <el-empty v-if="!fpSnapshot && !fpLoading" description="暂无采集数据，启动环境后可对照伪装是否生效" />
+      <el-descriptions
+        v-else-if="fpSnapshot"
+        title="实际采集"
+        :column="1"
+        border
+        size="small"
+        class="fp-block"
+        v-loading="fpLoading"
+      >
+        <el-descriptions-item label="采集时间">{{ fpSnapshot.collectedAt }}</el-descriptions-item>
+        <el-descriptions-item label="User-Agent">
+          <span class="fp-mono">{{ fpSnapshot.userAgent }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="language">{{ fpSnapshot.language }}</el-descriptions-item>
+        <el-descriptions-item label="languages">{{ fpSnapshot.languages?.join(', ') }}</el-descriptions-item>
+        <el-descriptions-item label="timezone">{{ fpSnapshot.timezone }}</el-descriptions-item>
+        <el-descriptions-item label="locale">{{ fpSnapshot.locale || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="platform">{{ fpSnapshot.platform }}</el-descriptions-item>
+        <el-descriptions-item label="CPU 并发">{{ fpSnapshot.hardwareConcurrency ?? '—' }}</el-descriptions-item>
+        <el-descriptions-item label="deviceMemory">{{ fpSnapshot.deviceMemory ?? '—' }}</el-descriptions-item>
+        <el-descriptions-item label="屏幕">
+          {{ fpSnapshot.screen.width }}×{{ fpSnapshot.screen.height }}
+          · {{ fpSnapshot.screen.colorDepth }}bit
+          · DPR {{ fpSnapshot.screen.pixelRatio }}
+        </el-descriptions-item>
+        <el-descriptions-item label="Canvas hash">{{ fpSnapshot.canvasHash || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="WebGL Vendor">{{ fpSnapshot.webglVendor || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="WebGL Renderer">{{ fpSnapshot.webglRenderer || '—' }}</el-descriptions-item>
+      </el-descriptions>
+    </el-drawer>
   </div>
 </template>
 
@@ -748,5 +975,25 @@ h2 {
   font-variant-numeric: tabular-nums;
   text-align: center;
   pointer-events: none;
+}
+.fp-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.fp-block {
+  margin-bottom: 16px;
+}
+.fp-mono {
+  word-break: break-all;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+.hint {
+  font-size: 12px;
+  color: var(--bb-muted);
+  line-height: 1.5;
 }
 </style>

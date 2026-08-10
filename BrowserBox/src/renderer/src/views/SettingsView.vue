@@ -9,7 +9,9 @@ const form = reactive({
   defaultBrowserVersion: '',
   launchIntervalMs: 1000,
   logLevel: 'INFO' as AppSettings['logLevel'],
-  closeAction: 'ask' as CloseAction
+  closeAction: 'ask' as CloseAction,
+  syncLocaleWithProxy: true,
+  fingerprintMode: 'ua' as AppSettings['fingerprintMode']
 })
 
 const preferredDataDir = ref('')
@@ -40,6 +42,11 @@ async function load(): Promise<void> {
   form.launchIntervalMs = s.launchIntervalMs
   form.logLevel = s.logLevel
   form.closeAction = s.closeAction || 'ask'
+  form.syncLocaleWithProxy = s.syncLocaleWithProxy !== false
+  form.fingerprintMode =
+    s.fingerprintMode === 'off' || s.fingerprintMode === 'cdp' || s.fingerprintMode === 'ua'
+      ? s.fingerprintMode
+      : 'ua'
   dataDirMode.value = info.isDefault ? 'default' : 'custom'
   customDataDir.value = info.isDefault ? '' : info.dataDir
   browsers.value = await invoke('browser:list')
@@ -94,7 +101,9 @@ async function save(): Promise<void> {
       defaultBrowserVersion: form.defaultBrowserVersion,
       launchIntervalMs: form.launchIntervalMs,
       logLevel: form.logLevel,
-      closeAction: form.closeAction
+      closeAction: form.closeAction,
+      syncLocaleWithProxy: form.syncLocaleWithProxy,
+      fingerprintMode: form.fingerprintMode
     })
     ElMessage.success('已保存')
   } catch (e) {
@@ -142,6 +151,21 @@ onMounted(() => void load())
             未设置或选择「每次询问」时，点关闭会弹出确认框。选择另外两项后，关闭窗口将直接执行对应动作。
           </div>
         </div>
+      </el-form-item>
+      <el-form-item label="地区语言同步">
+        <div class="close-action">
+          <el-switch v-model="form.syncLocaleWithProxy" active-text="开启" inactive-text="关闭" />
+          <div class="hint">
+            开启后，未单独指定语言的环境会按绑定代理国家同步语言 / Accept-Language / 时区。环境编辑里可覆盖语言。
+          </div>
+        </div>
+      </el-form-item>
+      <el-form-item label="指纹信息">
+        <el-select v-model="form.fingerprintMode" style="width: 100%">
+          <el-option label="简单伪装" value="ua" />
+          <el-option label="深度伪装" value="cdp" />
+          <el-option label="关闭" value="off" />
+        </el-select>
       </el-form-item>
       <el-form-item label="默认浏览器">
         <el-select v-model="form.defaultBrowserVersion" clearable placeholder="自动选择" style="width: 100%">

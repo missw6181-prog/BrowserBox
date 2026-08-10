@@ -5,8 +5,10 @@ import {
   createWriteStream,
   unlinkSync,
   createReadStream,
-  cpSync
+  cpSync,
+  rmSync
 } from 'fs'
+import { ErrorCodes } from '../../shared/types'
 import { join } from 'path'
 import { get } from 'https'
 import { is } from '@electron-toolkit/utils'
@@ -54,23 +56,23 @@ export interface MilestoneInfo {
  * and optional system Google Chrome.
  */
 export class BrowserManager {
-  /** 安装包内置 CfT 目录（extraResources/bundled-browsers） */
-  getBundledBrowsersRoot(): string {
-    if (is.dev) {
-      return join(process.cwd(), 'bundled-browsers')
-    }
+  /** 安装包内置 CfT 目录（extraResources/bundled-browsers）。开发态不从工程目录灌入。 */
+  getBundledBrowsersRoot(): string | null {
+    // 安装包已默认不附带 CfT；开发态若对工程内巨型 chrome-win64 做 cpSync，
+    // 在含中文的长路径下会触发 Electron 原生崩溃（0xC0000409 / basic_string）。
+    if (is.dev) return null
     return join(process.resourcesPath, 'bundled-browsers')
   }
 
   /**
    * 把安装包自带的 Chrome for Testing 复制到数据目录（已存在则跳过）。
-   * 在选择/初始化数据目录后调用。
+   * 在选择/初始化数据目录后调用。开发态与无内置资源时均为空操作。
    */
   seedBundledBrowsers(): string[] {
     if (!configManager.isReady()) return []
     const srcRoot = this.getBundledBrowsersRoot()
-    if (!existsSync(srcRoot)) {
-      logger.info('browser', '无内置浏览器目录', { srcRoot })
+    if (!srcRoot || !existsSync(srcRoot)) {
+      logger.info('browser', '无内置浏览器目录，跳过灌入', { srcRoot })
       return []
     }
 
@@ -78,9 +80,12 @@ export class BrowserManager {
     mkdirSync(dstRoot, { recursive: true })
     const seeded: string[] = []
 
+    const removed = new Set(configManager.get('settings').removedBrowserMajors || [])
+
     for (const name of readdirSync(srcRoot, { withFileTypes: true })) {
       if (!name.isDirectory()) continue
       const major = name.name
+      if (removed.has(major)) continue
       const src = join(srcRoot, major)
       const dst = join(dstRoot, major)
       if (this.findChromeExe(dst)) continue
@@ -154,6 +159,11 @@ export class BrowserManager {
       /* ignore */
     }
     return ''
+  }
+
+  /** 读取 chrome.exe 旁版本目录名，供指纹 UA 对齐 */
+  getChromeVersion(chromeExe: string): string {
+    return this.readNearbyVersion(chromeExe)
   }
 
   listInstalled(): BrowserInstallInfo[] {
@@ -350,12 +360,68 @@ export class BrowserManager {
     }
     const exe = this.findChromeExe(targetDir)
     if (!exe) throw new Error('解压后未找到 chrome.exe')
+    // 用户重新下载后，允许再次使用（清掉「已删除」标记）
+    const removed = (configManager.get('settings').removedBrowserMajors || []).filter(
+      (m) => m !== info.major
+    )
     // 安装后默认优先使用 Chrome for Testing 150
     const has150 = !!this.findChromeExe(configManager.resolvePath('Browser', '150'))
-    configManager.updateSettings({ defaultBrowserVersion: has150 ? '150' : info.major })
+    configManager.updateSettings({
+      defaultBrowserVersion: has150 ? '150' : info.major,
+      removedBrowserMajors: removed
+    })
     logger.info('browser', `已安装 Chrome ${info.version} -> ${exe}`)
     onProgress?.('完成')
     return { version: info.version, major: info.major, exe }
+  }
+
+  /**
+   * 删除数据目录中的 CfT 版本。
+   * - 本机 Chrome（system）不可删
+   * - 当前默认版本不可删
+   * - 删除后记入 removedBrowserMajors，避免安装包内置版本被再次自动灌回
+   */
+  uninstall(id: string): void {
+    const key = (id || '').trim()
+    if (!key || key === SYSTEM_BROWSER_ID || key === 'local') {
+      throw {
+        code: ErrorCodes.CONFIG_INVALID,
+        message: '本机 Google Chrome 不能通过本工具删除'
+      }
+    }
+    if (!configManager.isReady()) {
+      throw { code: ErrorCodes.DATA_DIR_NOT_SET, message: '数据目录未就绪' }
+    }
+
+    const settings = configManager.get('settings')
+    if (settings.defaultBrowserVersion === key) {
+      throw {
+        code: ErrorCodes.CONFIG_INVALID,
+        message: '当前默认浏览器不能删除，请先将其它版本设为默认'
+      }
+    }
+
+    const dir = configManager.resolvePath('Browser', key)
+    if (!existsSync(dir) || !this.findChromeExe(dir)) {
+      throw {
+        code: ErrorCodes.BROWSER_VERSION_NOT_FOUND,
+        message: `未找到已安装的浏览器版本 ${key}`
+      }
+    }
+
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch (err) {
+      throw {
+        code: ErrorCodes.CONFIG_WRITE_FAILED,
+        message: `删除失败：${String(err)}`
+      }
+    }
+
+    const removed = new Set(settings.removedBrowserMajors || [])
+    removed.add(key)
+    configManager.updateSettings({ removedBrowserMajors: [...removed] })
+    logger.info('browser', `已删除 Chrome for Testing ${key}`, { dir })
   }
 
   async installLatestStable(

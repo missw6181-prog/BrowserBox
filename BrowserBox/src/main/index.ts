@@ -16,6 +16,16 @@ let tray: Tray | null = null
 let isQuitting = false
 let closePromptOpen = false
 
+/** 单实例：再次启动时唤起已有窗口，不新开进程 */
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    showMainWindow()
+  })
+}
+
 function resolveAppIconPath(): string | undefined {
   const candidates = [
     process.resourcesPath ? join(process.resourcesPath, 'icon.ico') : '',
@@ -84,9 +94,9 @@ function buildTrayMenu(): Menu {
     ...envItems,
     { type: 'separator' },
     {
-      label: '退出（关闭所有环境）',
+      label: '退出',
       click: () => {
-        void quitApp()
+        void confirmQuitFromTray()
       }
     }
   ])
@@ -151,6 +161,54 @@ async function quitApp(): Promise<void> {
       mainWindow = null
     }
     app.quit()
+  }
+}
+
+/** 托盘右键「退出」：先确认，并提示会关闭全部环境 */
+async function confirmQuitFromTray(): Promise<void> {
+  if (isQuitting || closePromptOpen) return
+  closePromptOpen = true
+  try {
+    let runningCount = 0
+    try {
+      runningCount = environmentManager.listRunning().length
+    } catch {
+      /* ignore */
+    }
+
+    const win =
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.getFocusedWindow()
+    // 主窗口若在托盘隐藏，先显示，避免确认框不好察觉
+    if (win && !win.isDestroyed() && !win.isVisible()) {
+      if (win.isMinimized()) win.restore()
+      win.show()
+    }
+
+    const detail =
+      runningCount > 0
+        ? `当前有 ${runningCount} 个环境正在运行。确认退出后将强制关闭这些浏览器窗口，并结束主程序。`
+        : '确认退出后将结束主程序。'
+
+    const opts: Electron.MessageBoxOptions = {
+      type: 'warning',
+      title: '退出确认',
+      message: '确定要退出吗？所有浏览器环境将被关闭！',
+      detail,
+      buttons: ['退出并关闭全部环境', '取消'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true
+    }
+
+    const { response } = win && !win.isDestroyed()
+      ? await dialog.showMessageBox(win, opts)
+      : await dialog.showMessageBox(opts)
+
+    if (response === 0) {
+      await quitApp()
+    }
+  } finally {
+    closePromptOpen = false
   }
 }
 
@@ -247,6 +305,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return
+
   electronApp.setAppUserModelId('com.browserbox.app')
 
   app.on('browser-window-created', (_, window) => {

@@ -130,6 +130,15 @@ export class ConfigManager {
     if (!settings.closeAction || !['ask', 'quit', 'tray'].includes(settings.closeAction)) {
       settings.closeAction = 'ask'
     }
+    if (!Array.isArray(settings.removedBrowserMajors)) {
+      settings.removedBrowserMajors = []
+    }
+    if (typeof settings.syncLocaleWithProxy !== 'boolean') {
+      settings.syncLocaleWithProxy = true
+    }
+    if (settings.fingerprintMode !== 'off' && settings.fingerprintMode !== 'ua' && settings.fingerprintMode !== 'cdp') {
+      settings.fingerprintMode = 'ua'
+    }
 
     this.store = {
       settings,

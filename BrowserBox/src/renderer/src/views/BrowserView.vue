@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '../services/api'
 
 interface BrowserInstallInfo {
@@ -133,6 +133,35 @@ async function setDefault(id: string): Promise<void> {
   }
 }
 
+async function removeBrowser(row: BrowserInstallInfo): Promise<void> {
+  if (row.source === 'system') {
+    ElMessage.warning('本机 Google Chrome 不能通过本工具删除')
+    return
+  }
+  if (defaultVersion.value === row.id) {
+    ElMessage.warning('当前默认浏览器不能删除，请先将其它版本设为默认')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认删除 Chrome for Testing ${row.major}？\n将从数据目录移除该版本文件；安装包内置版本也不会再自动灌回（可重新下载）。`,
+      '删除浏览器',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+    await invoke('browser:uninstall', row.id)
+    ElMessage.success(`已删除 ${row.major}`)
+    await refresh()
+    if (milestones.value.length) await loadMilestones()
+  } catch (e) {
+    if (e === 'cancel' || (e as { message?: string })?.message === 'cancel') return
+    ElMessage.error((e as Error).message)
+  }
+}
+
+function canDelete(row: BrowserInstallInfo): boolean {
+  return row.source === 'cft' && defaultVersion.value !== row.id
+}
+
 function sourceLabel(source: string): string {
   return source === 'system' ? '本机 Chrome' : 'Chrome for Testing'
 }
@@ -224,7 +253,7 @@ onUnmounted(() => {
         <el-table-column prop="major" label="标识" width="100" />
         <el-table-column prop="version" label="版本" width="160" />
         <el-table-column prop="path" label="路径" min-width="280" show-overflow-tooltip />
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button
               link
@@ -233,6 +262,15 @@ onUnmounted(() => {
               @click="setDefault(row.id)"
             >
               {{ defaultVersion === row.id ? '默认' : '设为默认' }}
+            </el-button>
+            <el-button
+              v-if="row.source === 'cft'"
+              link
+              type="danger"
+              :disabled="!canDelete(row)"
+              @click="removeBrowser(row)"
+            >
+              删除
             </el-button>
           </template>
         </el-table-column>
