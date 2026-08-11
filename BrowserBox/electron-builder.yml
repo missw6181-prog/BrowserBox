@@ -21,6 +21,8 @@ extraResources:
     to: icon-env.png
   - from: resources/icon-env.svg
     to: icon-env.svg
+asarUnpack:
+  - node_modules/koffi/**
 win:
   target:
     - target: nsis

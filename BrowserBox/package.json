@@ -19,6 +19,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "element-plus": "^2.10.4",
     "flag-icons": "^7.5.0",
+    "koffi": "^3.1.4",
     "pinia": "^3.0.3",
     "proxy-chain": "^2.5.1",
     "rcedit": "^5.0.2",

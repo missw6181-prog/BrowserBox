@@ -14,17 +14,16 @@ import {
   killChromeByUserDataDir,
   launchViaShortcut,
   removeEnvShortcut,
-  findChromePidsByUserDataDir,
   waitForChromePids,
   preparePatchedChromeExe,
   removePatchedChromeExe,
   applyWindowIcons,
   writeEnvAppIcon,
-  startIconWatcher,
-  stopIconWatcher,
+  startBriefIconBoost,
+  waitForProcessExit,
   focusEnvWindows
 } from '../browser/TaskbarShortcut'
-import type { ChildProcess } from 'child_process'
+import { findChromePidsByUserDataDirSync } from '../win32/native'
 
 export interface CreateEnvironmentInput {
   name: string
@@ -58,8 +57,10 @@ interface RuntimeState {
   startedAt?: string
   profileAbs?: string
   icoPath?: string
-  watchTimer?: ReturnType<typeof setInterval>
-  iconWatcher?: ChildProcess | null
+  /** 取消句柄等待（停止环境 / 清理时 abort） */
+  watchAbort?: AbortController
+  /** 短暂图标注入停止函数（替代常驻 PowerShell） */
+  stopIconBoost?: (() => void) | null
 }
 
 function padDisplayId(n: number): string {
@@ -374,52 +375,47 @@ export class EnvironmentManager {
 
   private clearWatch(id: string): void {
     const rt = this.runtime.get(id)
-    if (rt?.watchTimer) {
-      clearInterval(rt.watchTimer)
-      rt.watchTimer = undefined
+    if (rt?.watchAbort) {
+      try {
+        rt.watchAbort.abort()
+      } catch {
+        /* ignore */
+      }
+      rt.watchAbort = undefined
     }
-    if (rt?.iconWatcher) {
-      stopIconWatcher(rt.iconWatcher)
-      rt.iconWatcher = null
+    if (rt?.stopIconBoost) {
+      try {
+        rt.stopIconBoost()
+      } catch {
+        /* ignore */
+      }
+      rt.stopIconBoost = null
     }
   }
 
-  private watchUntilExit(id: string, profileAbs: string): void {
+  /** 等待 Chrome 主进程退出（句柄探测，不再周期拉起 PowerShell / WMI） */
+  private watchUntilExit(id: string, chromePid: number): void {
     const rt = this.runtime.get(id)
-    if (rt?.watchTimer) {
-      clearInterval(rt.watchTimer)
-      rt.watchTimer = undefined
+    if (rt?.watchAbort) {
+      try {
+        rt.watchAbort.abort()
+      } catch {
+        /* ignore */
+      }
     }
-    let misses = 0
-    let checking = false
-    const timer = setInterval(() => {
-      if (checking) return
-      checking = true
-      void (async () => {
-        try {
-          // 只看主进程：用户关掉窗口后主进程退出，残留 gpu/crashpad 不再误判为运行中
-          const mains = await findChromePidsByUserDataDir(profileAbs, { mainOnly: true })
-          if (!mains.length) {
-            misses += 1
-            if (misses < 2) return
-            this.clearWatch(id)
-            await localProxyManager.stop(id)
-            this.setRuntime(id, { status: 'stopped' })
-            logger.info('environment', `Chrome 已退出 ${id}`)
-          } else {
-            misses = 0
-            const cur = this.runtime.get(id)
-            if (cur && cur.status !== 'stopping') {
-              this.setRuntime(id, { ...cur, chromePid: mains[0], status: 'running' })
-            }
-          }
-        } finally {
-          checking = false
-        }
-      })()
-    }, 1500)
-    const cur = this.runtime.get(id)
-    if (cur) cur.watchTimer = timer
+    const ac = new AbortController()
+    if (rt) rt.watchAbort = ac
+
+    void (async () => {
+      const result = await waitForProcessExit(chromePid, ac.signal)
+      if (result === 'aborted') return
+      const cur = this.runtime.get(id)
+      if (!cur || cur.status === 'stopping' || cur.status === 'stopped') return
+      this.clearWatch(id)
+      await localProxyManager.stop(id)
+      this.setRuntime(id, { status: 'stopped' })
+      logger.info('environment', `Chrome 已退出 ${id}`, { chromePid })
+    })()
   }
 
   /** 将运行中的环境窗口置顶显示 */
@@ -550,10 +546,10 @@ export class EnvironmentManager {
         throw { code: ErrorCodes.BROWSER_NOT_FOUND, message: '浏览器进程未能在时限内启动' }
       }
 
-      // 立即注入 + 常驻监视（Chrome 会把图标改回 TEST）
+      // 立即注入 + 短暂多次覆盖（替代常驻 PowerShell 监视）
       const applied = await applyWindowIcons(icoPath, pids)
       logger.info('environment', `窗口图标注入 ${applied} 个窗口`)
-      const iconWatcher = startIconWatcher(icoPath, profileAbs, this.shortcutsDir())
+      const iconBoost = startBriefIconBoost(icoPath, () => findChromePidsByUserDataDirSync(profileAbs))
 
       this.setRuntime(id, {
         status: 'running',
@@ -562,9 +558,9 @@ export class EnvironmentManager {
         startedAt: new Date().toISOString(),
         profileAbs,
         icoPath,
-        iconWatcher
+        stopIconBoost: iconBoost.stop
       })
-      this.watchUntilExit(id, profileAbs)
+      this.watchUntilExit(id, pids[0])
 
       const all = configManager.get('environments')
       const idx = all.findIndex((e) => e.id === id)

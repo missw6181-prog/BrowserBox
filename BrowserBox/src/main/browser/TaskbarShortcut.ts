@@ -8,12 +8,22 @@ import {
   statSync
 } from 'fs'
 import { basename, dirname, join } from 'path'
-import { execFile, spawn, type ChildProcess } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { app, nativeImage, shell } from 'electron'
 import { logger } from '../logger/Logger'
+import {
+  applyWindowIconsSync,
+  findChromePidsByUserDataDirSync,
+  focusWindowsByPids,
+  startBriefIconBoost,
+  terminatePids,
+  waitForProcessExit
+} from '../win32/native'
 
 const execFileAsync = promisify(execFile)
+
+export { waitForProcessExit, startBriefIconBoost }
 
 /** 环境默认配色（列表标识用，不再用于任务栏图标） */
 export const ENV_ICON_COLORS = [
@@ -413,53 +423,18 @@ export function removeEnvShortcut(shortcutsDir: string, envId: string): void {
   }
 }
 
-function normalizeCmdPath(p: string): string {
-  return p.replace(/\//g, '\\').toLowerCase()
-}
-
 /**
  * 查找绑定指定 user-data-dir 的浏览器进程。
- * mainOnly=true 时只返回主进程（命令行不含 --type=），用于判断用户是否已关掉浏览器。
- * 子进程（gpu/renderer 等）即使残留也不再把环境当成「仍在运行」。
+ * mainOnly=true 时只返回主进程（命令行不含 --type=）。
  */
 export async function findChromePidsByUserDataDir(
   userDataDir: string,
   opts?: { mainOnly?: boolean }
 ): Promise<number[]> {
-  const needle = normalizeCmdPath(userDataDir)
-  const mainOnly = opts?.mainOnly ? '1' : '0'
-  const ps = `
-$ErrorActionPreference = 'SilentlyContinue'
-$needle = $env:BB_UD_NEEDLE
-$mainOnly = $env:BB_MAIN_ONLY -eq '1'
-Get-CimInstance Win32_Process | ForEach-Object {
-  $name = $_.Name
-  if (-not $name) { return }
-  $n = $name.ToLower()
-  if ($n -ne 'chrome.exe' -and -not $n.StartsWith('bb_')) { return }
-  if (-not $_.CommandLine) { return }
-  $cl = $_.CommandLine.ToLower().Replace('/','\\')
-  if (-not $cl.Contains($needle)) { return }
-  if ($mainOnly -and $cl.Contains('--type=')) { return }
-  $_.ProcessId
-}
-`
   try {
-    const { stdout } = await execFileAsync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', ps],
-      {
-        windowsHide: true,
-        timeout: 12000,
-        encoding: 'utf8',
-        env: { ...process.env, BB_UD_NEEDLE: needle, BB_MAIN_ONLY: mainOnly }
-      }
-    )
-    return String(stdout)
-      .split(/\r?\n/)
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => Number.isFinite(n) && n > 0)
-  } catch {
+    return findChromePidsByUserDataDirSync(userDataDir, opts)
+  } catch (err) {
+    logger.warn('environment', '枚举浏览器进程失败', { err: String(err) })
     return []
   }
 }
@@ -470,17 +445,16 @@ export async function waitForChromePids(
 ): Promise<number[]> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
-    // 启动阶段子进程可能先出现，主进程稍后就绪：先取全部，优先返回无 --type= 的
-    const mains = await findChromePidsByUserDataDir(userDataDir, { mainOnly: true })
+    const mains = findChromePidsByUserDataDirSync(userDataDir, { mainOnly: true })
     if (mains.length) return mains
-    const any = await findChromePidsByUserDataDir(userDataDir)
+    const any = findChromePidsByUserDataDirSync(userDataDir)
     if (any.length) return any
     await new Promise((r) => setTimeout(r, 300))
   }
   return []
 }
 
-/** 将指定环境的 Chrome 窗口恢复并置顶（按 user-data-dir 对应进程，不依赖窗口标题） */
+/** 将指定环境的 Chrome 窗口恢复并置顶（按 user-data-dir 对应进程） */
 export async function focusEnvWindows(opts: {
   displayId: string
   name: string
@@ -488,333 +462,49 @@ export async function focusEnvWindows(opts: {
 }): Promise<number> {
   if (!opts.userDataDir) return 0
 
-  // 窗口可能挂在主进程或其它 chrome 进程上，取该 profile 下全部相关 PID
-  let pids = await findChromePidsByUserDataDir(opts.userDataDir)
+  let pids = findChromePidsByUserDataDirSync(opts.userDataDir)
   if (!pids.length) {
-    pids = await findChromePidsByUserDataDir(opts.userDataDir, { mainOnly: true })
+    pids = findChromePidsByUserDataDirSync(opts.userDataDir, { mainOnly: true })
   }
   if (!pids.length) {
-    logger.warn('environment', '定位失败：未找到进程', { displayId: opts.displayId, dir: opts.userDataDir })
+    logger.warn('environment', '定位失败：未找到进程', {
+      displayId: opts.displayId,
+      dir: opts.userDataDir
+    })
     return 0
   }
 
-  const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-Add-Type -TypeDefinition @"
-using System;
-using System.Text;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-public class BbFocus {
-  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lp);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-  public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-  public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
-  static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
-  static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
-  public static int FocusByPids(int[] pids) {
-    var set = new HashSet<uint>();
-    foreach (var p in pids) set.Add((uint)p);
-    var targets = new List<IntPtr>();
-    EnumWindows((hWnd, lp) => {
-      if (!IsWindowVisible(hWnd)) return true;
-      uint pid;
-      GetWindowThreadProcessId(hWnd, out pid);
-      if (!set.Contains(pid)) return true;
-      var cls = new StringBuilder(256);
-      GetClassName(hWnd, cls, 256);
-      var c = cls.ToString();
-      if (c.IndexOf("Chrome_WidgetWin_") != 0) return true;
-      // 只要有标题的顶层窗口（过滤掉无标题工具窗）
-      if (GetWindowTextLength(hWnd) <= 0) return true;
-      targets.Add(hWnd);
-      return true;
-    }, IntPtr.Zero);
-    int n = 0;
-    foreach (var hWnd in targets) {
-      if (IsIconic(hWnd)) ShowWindow(hWnd, 9); // SW_RESTORE
-      else ShowWindow(hWnd, 5); // SW_SHOW
-      uint fgProc;
-      var fg = GetForegroundWindow();
-      uint fgTid = GetWindowThreadProcessId(fg, out fgProc);
-      uint tgtProc;
-      uint tgtTid = GetWindowThreadProcessId(hWnd, out tgtProc);
-      uint cur = GetCurrentThreadId();
-      AttachThreadInput(cur, tgtTid, true);
-      if (fgTid != 0) AttachThreadInput(cur, fgTid, true);
-      BringWindowToTop(hWnd);
-      SetForegroundWindow(hWnd);
-      // 短暂 TOPMOST 再取消，提高置顶成功率
-      SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0040);
-      SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0040);
-      if (fgTid != 0) AttachThreadInput(cur, fgTid, false);
-      AttachThreadInput(cur, tgtTid, false);
-      n++;
-    }
-    return n;
-  }
-}
-"@
-$pids = @(${pids.join(',')})
-[BbFocus]::FocusByPids($pids)
-`
   try {
-    const { stdout } = await execFileAsync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', script],
-      {
-        windowsHide: true,
-        timeout: 12000,
-        encoding: 'utf8'
-      }
-    )
-    const n = parseInt(String(stdout).trim().split(/\r?\n/).pop() || '', 10)
+    const n = focusWindowsByPids(pids)
     logger.info('environment', `定位环境窗口 ${opts.displayId}`, { focused: n, pids })
-    return Number.isFinite(n) ? n : 0
+    return n
   } catch (err) {
-    logger.warn('environment', '定位环境窗口失败', { err: String(err), displayId: opts.displayId, pids })
+    logger.warn('environment', '定位环境窗口失败', {
+      err: String(err),
+      displayId: opts.displayId,
+      pids
+    })
     return 0
   }
 }
 
 export async function killChromeByUserDataDir(userDataDir: string, force = false): Promise<void> {
-  const pids = await findChromePidsByUserDataDir(userDataDir)
+  const pids = findChromePidsByUserDataDirSync(userDataDir)
   if (!pids.length) return
-  const list = pids.join(',')
-  const forceFlag = force ? '-Force' : ''
-  const ps = `
-$ErrorActionPreference = 'SilentlyContinue'
-@(${list}) | ForEach-Object { Stop-Process -Id $_ ${forceFlag} -ErrorAction SilentlyContinue }
-`
   try {
-    await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
-      windowsHide: true,
-      timeout: 15000
-    })
+    terminatePids(pids, force)
   } catch (err) {
     logger.warn('environment', '结束 Chrome 进程失败', { err: String(err) })
   }
 }
 
-/**
- * 强制把指定进程的 Chrome 窗口图标换成自定义 ICO（单次）。
- */
+/** 强制把指定进程的 Chrome 窗口图标换成自定义 ICO（单次，主进程内完成） */
 export async function applyWindowIcons(icoPath: string, pids: number[]): Promise<number> {
-  if (!pids.length || !existsSync(icoPath)) return 0
-
-  const scriptPath = join(dirname(icoPath), `_apply_icon_${process.pid}_${Date.now()}.ps1`)
-  const script = `
-$ErrorActionPreference = 'Stop'
-$ico = $env:BB_ICO
-$pids = @(${pids.join(',')})
-if (-not (Get-Variable -Name BbWinIconReady -Scope Global -ErrorAction SilentlyContinue)) {
-  Add-Type -TypeDefinition @"
-using System;
-using System.Text;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-public class BbWinIcon {
-  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lp);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-  public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-  public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-  public static extern IntPtr LoadImage(IntPtr hInst, string name, uint type, int cx, int cy, uint fuLoad);
-  [DllImport("user32.dll", EntryPoint="SetClassLongPtrW")]
-  public static extern IntPtr SetClassLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-  public static int Apply(string icoPath, int[] pids) {
-    var set = new HashSet<uint>();
-    foreach (var p in pids) set.Add((uint)p);
-    IntPtr big = LoadImage(IntPtr.Zero, icoPath, 1, 32, 32, 0x0010);
-    IntPtr small = LoadImage(IntPtr.Zero, icoPath, 1, 16, 16, 0x0010);
-    if (big == IntPtr.Zero) return -1;
-    if (small == IntPtr.Zero) small = big;
-    int n = 0;
-    EnumWindows((hWnd, lp) => {
-      uint pid; GetWindowThreadProcessId(hWnd, out pid);
-      if (!set.Contains(pid) || !IsWindowVisible(hWnd)) return true;
-      var sb = new StringBuilder(256);
-      GetClassName(hWnd, sb, 256);
-      string cls = sb.ToString();
-      if (cls.IndexOf("Chrome_WidgetWin_") != 0) return true;
-      SendMessage(hWnd, 0x0080, (IntPtr)1, big);
-      SendMessage(hWnd, 0x0080, (IntPtr)0, small);
-      try {
-        SetClassLongPtr(hWnd, -14, big);
-        SetClassLongPtr(hWnd, -34, small);
-      } catch {}
-      n++;
-      return true;
-    }, IntPtr.Zero);
-    return n;
-  }
-}
-"@
-  $global:BbWinIconReady = $true
-}
-[BbWinIcon]::Apply($ico, $pids)
-`
   try {
-    writeFileSync(scriptPath, script, 'utf8')
-    const { stdout } = await execFileAsync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-      {
-        windowsHide: true,
-        timeout: 20000,
-        encoding: 'utf8',
-        env: { ...process.env, BB_ICO: icoPath }
-      }
-    )
-    const n = parseInt(String(stdout).trim(), 10)
-    return Number.isFinite(n) ? n : 0
+    return applyWindowIconsSync(icoPath, pids)
   } catch (err) {
     logger.warn('environment', '注入窗口图标失败', { err: String(err) })
     return 0
-  } finally {
-    try {
-      if (existsSync(scriptPath)) unlinkSync(scriptPath)
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-/**
- * 常驻监视：Chrome 会反复把窗口图标改回 TEST，需持续覆盖。
- * 按 user-data-dir 匹配进程；无进程连续多次后自动退出。
- */
-export function startIconWatcher(
-  icoPath: string,
-  userDataDir: string,
-  shortcutsDir: string
-): ChildProcess {
-  const needle = normalizeCmdPath(userDataDir)
-  const scriptPath = join(shortcutsDir, `_watch_icon_${Date.now()}.ps1`)
-  const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-$ico = $env:BB_ICO
-$needle = $env:BB_UD_NEEDLE
-Add-Type -TypeDefinition @"
-using System;
-using System.Text;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-public class BbWinIconWatch {
-  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lp);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-  public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-  public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-  public static extern IntPtr LoadImage(IntPtr hInst, string name, uint type, int cx, int cy, uint fuLoad);
-  [DllImport("user32.dll", EntryPoint="SetClassLongPtrW")]
-  public static extern IntPtr SetClassLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-  static IntPtr big = IntPtr.Zero;
-  static IntPtr small = IntPtr.Zero;
-  public static void Init(string icoPath) {
-    big = LoadImage(IntPtr.Zero, icoPath, 1, 32, 32, 0x0010);
-    small = LoadImage(IntPtr.Zero, icoPath, 1, 16, 16, 0x0010);
-    if (small == IntPtr.Zero) small = big;
-  }
-  public static int Apply(int[] pids) {
-    if (big == IntPtr.Zero) return -1;
-    var set = new HashSet<uint>();
-    foreach (var p in pids) set.Add((uint)p);
-    int n = 0;
-    EnumWindows((hWnd, lp) => {
-      uint pid; GetWindowThreadProcessId(hWnd, out pid);
-      if (!set.Contains(pid) || !IsWindowVisible(hWnd)) return true;
-      var sb = new StringBuilder(256);
-      GetClassName(hWnd, sb, 256);
-      if (sb.ToString().IndexOf("Chrome_WidgetWin_") != 0) return true;
-      SendMessage(hWnd, 0x0080, (IntPtr)1, big);
-      SendMessage(hWnd, 0x0080, (IntPtr)0, small);
-      try {
-        SetClassLongPtr(hWnd, -14, big);
-        SetClassLongPtr(hWnd, -34, small);
-      } catch {}
-      n++;
-      return true;
-    }, IntPtr.Zero);
-    return n;
-  }
-}
-"@
-[BbWinIconWatch]::Init($ico)
-$miss = 0
-while ($true) {
-  $pids = @()
-  Get-CimInstance Win32_Process | ForEach-Object {
-    $name = $_.Name
-    if (-not $name) { return }
-    $n = $name.ToLower()
-    if ($n -ne 'chrome.exe' -and -not $n.StartsWith('bb_')) { return }
-    if ($_.CommandLine) {
-      $cl = $_.CommandLine.ToLower().Replace('/','\\')
-      if ($cl.Contains($needle)) { $pids += $_.ProcessId }
-    }
-  }
-  if ($pids.Count -eq 0) {
-    $miss++
-    if ($miss -ge 5) { break }
-  } else {
-    $miss = 0
-    [void][BbWinIconWatch]::Apply($pids)
-  }
-  Start-Sleep -Milliseconds 1500
-}
-`
-  writeFileSync(scriptPath, script, 'utf8')
-  const child = spawn(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-    {
-      windowsHide: true,
-      stdio: 'ignore',
-      env: { ...process.env, BB_ICO: icoPath, BB_UD_NEEDLE: needle },
-      detached: false
-    }
-  )
-  const cleanup = (): void => {
-    try {
-      if (existsSync(scriptPath)) unlinkSync(scriptPath)
-    } catch {
-      /* ignore */
-    }
-  }
-  child.on('exit', cleanup)
-  child.on('error', cleanup)
-  logger.info('environment', '已启动任务栏图标监视', { icoPath })
-  return child
-}
-
-export function stopIconWatcher(child?: ChildProcess | null): void {
-  if (!child || child.killed) return
-  try {
-    child.kill()
-  } catch {
-    /* ignore */
   }
 }
 
