@@ -230,6 +230,60 @@ export function registerIpc(): void {
     }
   })
 
+  ipcMain.handle('environment:exportBox', async (_e, input: { ids?: string[]; includeProxies?: boolean }) => {
+    try {
+      const ids = Array.isArray(input?.ids) ? input.ids.filter(Boolean) : []
+      const includeProxies = !!input?.includeProxies
+      const win = BrowserWindow.getFocusedWindow()
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+      const saveOpts = {
+        title: '导出环境',
+        defaultPath: `environments-${stamp}.box`,
+        filters: [
+          { name: 'BrowserBox 环境包', extensions: ['box'] },
+          { name: '全部文件', extensions: ['*'] }
+        ]
+      }
+      const result = win
+        ? await dialog.showSaveDialog(win, saveOpts)
+        : await dialog.showSaveDialog(saveOpts)
+      if (result.canceled || !result.filePath) {
+        return fail({ code: 'CANCELLED', message: '已取消' })
+      }
+      const destPath = result.filePath.toLowerCase().endsWith('.box')
+        ? result.filePath
+        : `${result.filePath}.box`
+      const { exportBox } = await import('../environment/EnvBoxPack')
+      return ok(await exportBox(ids, { includeProxies, destPath }))
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('environment:importBox', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow()
+      const openOpts = {
+        title: '导入环境',
+        filters: [
+          { name: 'BrowserBox 环境包', extensions: ['box'] },
+          { name: '全部文件', extensions: ['*'] }
+        ],
+        properties: ['openFile' as const]
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, openOpts)
+        : await dialog.showOpenDialog(openOpts)
+      if (result.canceled || !result.filePaths?.length) {
+        return fail({ code: 'CANCELLED', message: '已取消' })
+      }
+      const { importBox } = await import('../environment/EnvBoxPack')
+      return ok(await importBox(result.filePaths[0]))
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
   ipcMain.handle('environment:stopMany', async (_e, ids: string[], force?: boolean) => {
     try {
       return ok(await environmentManager.stopMany(ids, force))

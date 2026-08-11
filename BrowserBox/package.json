@@ -17,6 +17,7 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "archiver": "^8.0.0",
     "chrome-remote-interface": "^0.34.0",
     "element-plus": "^2.10.4",
     "flag-icons": "^7.5.0",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^1.0.1",
+    "@types/archiver": "^8.0.0",
     "@types/chrome-remote-interface": "^0.34.0",
     "@types/node": "^22.16.5",
     "@types/unzipper": "^0.10.11",

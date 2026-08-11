@@ -22,6 +22,10 @@ const browsers = ref<Array<{ id: string; label: string; source: string }>>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
 const batchDialogVisible = ref(false)
+const exportDialogVisible = ref(false)
+const exportIncludeProxies = ref(false)
+const exportBusy = ref(false)
+const importBusy = ref(false)
 const editingId = ref<string | null>(null)
 const saving = ref(false)
 const batchBusy = ref(false)
@@ -121,6 +125,11 @@ const PROXY_TYPE_LABEL: Record<ProxyType, string> = {
 const isEdit = computed(() => !!editingId.value)
 const dialogTitle = computed(() => (isEdit.value ? '编辑环境' : '新建环境'))
 const hasSelection = computed(() => selectedIds.value.length > 0)
+const exportScopeText = computed(() =>
+  hasSelection.value
+    ? `将导出已选的 ${selectedIds.value.length} 个环境`
+    : `未勾选时将导出全部 ${rows.value.length} 个环境`
+)
 
 const proxyMap = computed(() => {
   const map = new Map<string, ProxyConfig>()
@@ -517,6 +526,67 @@ async function batchStop(): Promise<void> {
   }
 }
 
+function openExportDialog(): void {
+  if (!rows.value.length) {
+    ElMessage.warning('当前没有可导出的环境')
+    return
+  }
+  exportIncludeProxies.value = false
+  exportDialogVisible.value = true
+}
+
+async function doExportBox(): Promise<void> {
+  const ids = hasSelection.value ? [...selectedIds.value] : rows.value.map((r) => r.id)
+  if (!ids.length) {
+    ElMessage.warning('没有可导出的环境')
+    return
+  }
+  exportBusy.value = true
+  try {
+    const res = await invoke<{ path: string; count: number; missingProfiles: string[] }>(
+      'environment:exportBox',
+      { ids, includeProxies: exportIncludeProxies.value }
+    )
+    exportDialogVisible.value = false
+    let msg = `已导出 ${res.count} 个环境\n${res.path}`
+    if (res.missingProfiles?.length) {
+      msg += `\n其中 ${res.missingProfiles.length} 个缺少 Profile 目录`
+    }
+    ElMessage.success(msg)
+  } catch (e) {
+    const msg = (e as Error).message
+    if (msg.includes('取消')) return
+    ElMessage.error(msg)
+  } finally {
+    exportBusy.value = false
+  }
+}
+
+async function doImportBox(): Promise<void> {
+  importBusy.value = true
+  try {
+    const res = await invoke<{
+      imported: Array<{ id: string; displayId: string; name: string }>
+      proxiesCreated: number
+      needPassword: string[]
+      skipped: Array<{ name: string; reason: string }>
+    }>('environment:importBox')
+    const parts = [`已导入 ${res.imported.length} 个环境`]
+    if (res.proxiesCreated) parts.push(`新建代理 ${res.proxiesCreated} 个`)
+    if (res.needPassword?.length) parts.push(`${res.needPassword.length} 个代理需补密码`)
+    if (res.skipped?.length) parts.push(`跳过 ${res.skipped.length} 个`)
+    ElMessage.success(parts.join('；'))
+    await refresh()
+    void refreshLatencies()
+  } catch (e) {
+    const msg = (e as Error).message
+    if (msg.includes('取消')) return
+    ElMessage.error(msg)
+  } finally {
+    importBusy.value = false
+  }
+}
+
 async function remove(row: EnvRow): Promise<void> {
   try {
     await ElMessageBox.confirm(`确认删除环境 ${row.displayId} ${row.name}？将同时删除 Profile。`, '删除', {
@@ -580,6 +650,8 @@ onUnmounted(() => {
       <div class="actions">
         <el-button :loading="latencyRefreshing" @click="refreshLatencies">刷新延迟</el-button>
         <el-button @click="refresh()">刷新</el-button>
+        <el-button :loading="importBusy" @click="doImportBox">导入</el-button>
+        <el-button :disabled="!rows.length" @click="openExportDialog">导出</el-button>
         <el-button :disabled="!hasSelection" :loading="batchBusy" type="success" @click="batchStart">
           批量启动
         </el-button>
@@ -714,6 +786,22 @@ onUnmounted(() => {
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="saveEnv">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="exportDialogVisible" title="导出环境" width="460px">
+      <el-form label-width="110px">
+        <el-form-item label="范围">
+          <div class="hint">{{ exportScopeText }}（含 Profile；请先关闭运行中的环境）</div>
+        </el-form-item>
+        <el-form-item label="导出代理">
+          <el-switch v-model="exportIncludeProxies" />
+          <div class="hint">勾选后导出完整代理信息（含账号密码）。.box 请妥善保管。</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exportBusy" @click="doExportBox">导出</el-button>
       </template>
     </el-dialog>
 
