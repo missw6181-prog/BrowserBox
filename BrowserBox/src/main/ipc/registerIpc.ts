@@ -57,10 +57,10 @@ export function registerIpc(): void {
   ipcMain.handle('app:initDataDir', async (_e, dataDir: string) => {
     try {
       await configManager.initialize(dataDir)
-      const seeded = browserManager.seedBundledBrowsers()
+      browserManager.ensureSystemDefault()
       writeBoot({ dataDir })
-      logger.info('app', `数据目录初始化: ${dataDir}`, { seeded })
-      return ok({ settings: configManager.get('settings'), seeded })
+      logger.info('app', `数据目录初始化: ${dataDir}`)
+      return ok({ settings: configManager.get('settings') })
     } catch (err) {
       return fail(err)
     }
@@ -88,10 +88,10 @@ export function registerIpc(): void {
       await environmentManager.stopAll(true)
       await configManager.initialize(next)
       environmentManager.clearRuntime()
-      const seeded = browserManager.seedBundledBrowsers()
+      browserManager.ensureSystemDefault()
       writeBoot({ dataDir: next })
-      logger.info('app', `已切换数据目录 ${next}`, { seeded })
-      return ok({ dataDir: next, settings: configManager.get('settings'), seeded })
+      logger.info('app', `已切换数据目录 ${next}`)
+      return ok({ dataDir: next, settings: configManager.get('settings') })
     } catch (err) {
       return fail(err)
     }
@@ -336,6 +336,7 @@ export function registerIpc(): void {
   // Browser
   ipcMain.handle('browser:list', async () => {
     try {
+      browserManager.ensureSystemDefault()
       return ok(browserManager.listInstalled())
     } catch (err) {
       return fail(err)
@@ -390,7 +391,13 @@ export function registerIpc(): void {
 
   ipcMain.handle('browser:setDefault', async (_e, version: string) => {
     try {
-      return ok(configManager.updateSettings({ defaultBrowserVersion: version }))
+      if (version !== 'system') {
+        throw { code: 'BROWSER_NOT_ALLOWED', message: '当前默认浏览器仍仅支持本机 Google Chrome' }
+      }
+      if (!browserManager.detectSystemChrome()) {
+        throw { code: 'BROWSER_NOT_FOUND', message: '未检测到本机 Google Chrome' }
+      }
+      return ok(configManager.updateSettings({ defaultBrowserVersion: 'system' }))
     } catch (err) {
       return fail(err)
     }

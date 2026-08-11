@@ -1,15 +1,14 @@
 import {
   existsSync,
   readdirSync,
+  rmSync,
   mkdirSync,
   createWriteStream,
   unlinkSync,
-  createReadStream,
-  cpSync
+  createReadStream
 } from 'fs'
 import { join } from 'path'
 import { get } from 'https'
-import { is } from '@electron-toolkit/utils'
 import { Extract } from 'unzipper'
 import { configManager } from '../config/ConfigManager'
 import { logger } from '../logger/Logger'
@@ -49,76 +48,31 @@ export interface MilestoneInfo {
   installed: boolean
 }
 
-/**
- * Manage Chrome for Testing under <dataDir>/Browser/<major>/
- * and optional system Google Chrome.
- */
 export class BrowserManager {
-  /** 安装包内置 CfT 目录（extraResources/bundled-browsers） */
-  getBundledBrowsersRoot(): string {
-    if (is.dev) {
-      return join(process.cwd(), 'bundled-browsers')
-    }
-    return join(process.resourcesPath, 'bundled-browsers')
-  }
-
-  /**
-   * 把安装包自带的 Chrome for Testing 复制到数据目录（已存在则跳过）。
-   * 在选择/初始化数据目录后调用。
-   */
-  seedBundledBrowsers(): string[] {
-    if (!configManager.isReady()) return []
-    const srcRoot = this.getBundledBrowsersRoot()
-    if (!existsSync(srcRoot)) {
-      logger.info('browser', '无内置浏览器目录', { srcRoot })
-      return []
-    }
-
-    const dstRoot = configManager.resolvePath('Browser')
-    mkdirSync(dstRoot, { recursive: true })
-    const seeded: string[] = []
-
-    for (const name of readdirSync(srcRoot, { withFileTypes: true })) {
-      if (!name.isDirectory()) continue
-      const major = name.name
-      const src = join(srcRoot, major)
-      const dst = join(dstRoot, major)
-      if (this.findChromeExe(dst)) continue
+  removeManagedBrowsers(): number {
+    if (!configManager.isReady()) return 0
+    const root = configManager.resolvePath('Browser')
+    if (!existsSync(root)) return 0
+    let removed = 0
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
       try {
-        mkdirSync(dst, { recursive: true })
-        cpSync(src, dst, { recursive: true })
-        if (this.findChromeExe(dst)) {
-          seeded.push(major)
-          logger.info('browser', `已灌入内置 Chrome for Testing ${major}`)
-        }
+        rmSync(join(root, entry.name), { recursive: true, force: true })
+        removed += 1
       } catch (err) {
-        logger.warn('browser', `灌入内置浏览器失败 ${major}`, { err: String(err) })
+        logger.warn('browser', `删除已下载浏览器失败 ${entry.name}`, { err: String(err) })
       }
     }
-
-    if (seeded.length) {
-      const settings = configManager.get('settings')
-      if (!settings.defaultBrowserVersion) {
-        // 优先默认 Chrome for Testing 150
-        const preferred = seeded.includes('150')
-          ? '150'
-          : [...seeded].sort((a, b) => Number(a) - Number(b))[0]
-        configManager.updateSettings({ defaultBrowserVersion: preferred })
-      }
-    }
-    // 已有灌入版本但未设默认时，同样优先 150
-    this.ensureDefaultBrowser150()
-    return seeded
+    if (removed) logger.info('browser', '已清理已下载浏览器目录', { removed })
+    return removed
   }
 
-  /** 若已安装 150 且尚未设置默认，则设为 150 */
-  ensureDefaultBrowser150(): void {
+  ensureSystemDefault(): void {
     if (!configManager.isReady()) return
+    if (!this.detectSystemChrome()) return
     const settings = configManager.get('settings')
-    if (settings.defaultBrowserVersion) return
-    const root = configManager.resolvePath('Browser', '150')
-    if (this.findChromeExe(root)) {
-      configManager.updateSettings({ defaultBrowserVersion: '150' })
+    if (settings.defaultBrowserVersion !== SYSTEM_BROWSER_ID) {
+      configManager.updateSettings({ defaultBrowserVersion: SYSTEM_BROWSER_ID })
     }
   }
 
@@ -157,18 +111,6 @@ export class BrowserManager {
   }
 
   listInstalled(): BrowserInstallInfo[] {
-    // 打开浏览器列表前确保内置版本已灌入数据目录
-    try {
-      this.seedBundledBrowsers()
-    } catch {
-      /* ignore */
-    }
-    try {
-      this.ensureDefaultBrowser150()
-    } catch {
-      /* ignore */
-    }
-
     const result: BrowserInstallInfo[] = []
 
     const system = this.detectSystemChrome()
@@ -208,8 +150,7 @@ export class BrowserManager {
   /**
    * Resolve chrome.exe for an environment browserVersion.
    * - "system" → 本机 Google Chrome
-   * - "151" / "151.0.x" → 数据目录内 CfT
-   * - 空 → 设置默认 → 任一 CfT → 本机 Chrome
+   * - 其它值也回退到本机 Chrome
    */
   resolveExecutable(versionOrMajor: string): string | null {
     const key = (versionOrMajor || '').trim()
@@ -227,9 +168,7 @@ export class BrowserManager {
 
         const preferred = [key, ...dirs.filter((n) => n === key || n.startsWith(`${key}.`))]
         for (const name of preferred) {
-          const dir = join(root, name)
-          if (!existsSync(dir)) continue
-          const exe = this.findChromeExe(dir)
+          const exe = this.findChromeExe(join(root, name))
           if (exe) return exe
         }
       }
@@ -241,12 +180,11 @@ export class BrowserManager {
         const fallback = this.resolveExecutable(settings.defaultBrowserVersion)
         if (fallback) return fallback
       }
-      for (const item of this.listInstalled()) {
-        if (item.source === 'cft') return item.path
-      }
     }
 
-    return this.detectSystemChrome()?.path || null
+    const system = this.detectSystemChrome()?.path || null
+    if (system) return system
+    return this.listInstalled().find((item) => item.source === 'cft')?.path || null
   }
 
   private findChromeExe(dir: string): string | null {
@@ -260,10 +198,9 @@ export class BrowserManager {
     }
     try {
       for (const name of readdirSync(dir, { withFileTypes: true })) {
-        if (name.isDirectory()) {
-          const nested = join(dir, name.name, 'chrome.exe')
-          if (existsSync(nested)) return nested
-        }
+        if (!name.isDirectory()) continue
+        const nested = join(dir, name.name, 'chrome.exe')
+        if (existsSync(nested)) return nested
       }
     } catch {
       /* ignore */
@@ -350,9 +287,7 @@ export class BrowserManager {
     }
     const exe = this.findChromeExe(targetDir)
     if (!exe) throw new Error('解压后未找到 chrome.exe')
-    // 安装后默认优先使用 Chrome for Testing 150
-    const has150 = !!this.findChromeExe(configManager.resolvePath('Browser', '150'))
-    configManager.updateSettings({ defaultBrowserVersion: has150 ? '150' : info.major })
+    this.ensureSystemDefault()
     logger.info('browser', `已安装 Chrome ${info.version} -> ${exe}`)
     onProgress?.('完成')
     return { version: info.version, major: info.major, exe }

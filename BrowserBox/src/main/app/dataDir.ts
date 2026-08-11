@@ -62,7 +62,7 @@ export async function ensureDataDirReady(): Promise<{ ready: boolean; dataDir: s
   if (boot.dataDir) {
     try {
       await configManager.initialize(boot.dataDir)
-      browserManager.seedBundledBrowsers()
+      browserManager.ensureSystemDefault()
       logger.info('app', `已加载数据目录 ${boot.dataDir}`)
       return { ready: true, dataDir: boot.dataDir, auto: false }
     } catch (err) {
@@ -73,7 +73,7 @@ export async function ensureDataDirReady(): Promise<{ ready: boolean; dataDir: s
   const preferred = getPreferredDataDir()
   if (canUseAsDataDir(preferred)) {
     await configManager.initialize(preferred)
-    browserManager.seedBundledBrowsers()
+    browserManager.ensureSystemDefault()
     writeBoot({ dataDir: preferred })
     logger.info('app', `已自动使用安装目录旁数据目录 ${preferred}`)
     return { ready: true, dataDir: preferred, auto: true }
@@ -82,7 +82,7 @@ export async function ensureDataDirReady(): Promise<{ ready: boolean; dataDir: s
   const fallback = join(app.getPath('userData'), 'Data')
   if (canUseAsDataDir(fallback)) {
     await configManager.initialize(fallback)
-    browserManager.seedBundledBrowsers()
+    browserManager.ensureSystemDefault()
     writeBoot({ dataDir: fallback })
     logger.warn('app', `安装目录不可写，数据目录回退到 ${fallback}`, { preferred })
     return { ready: true, dataDir: fallback, auto: true }

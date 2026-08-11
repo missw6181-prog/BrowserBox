@@ -9,11 +9,6 @@ files:
   - '!bundled-browsers/**'
   - '!scripts/*'
 extraResources:
-  - from: bundled-browsers
-    to: bundled-browsers
-    filter:
-      - '**/*'
-      - '!**/bb_*.exe'
   - from: resources/icon.ico
     to: icon.ico
   - from: resources/icon.png

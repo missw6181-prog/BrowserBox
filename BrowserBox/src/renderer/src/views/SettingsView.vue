@@ -144,9 +144,10 @@ onMounted(() => void load())
         </div>
       </el-form-item>
       <el-form-item label="默认浏览器">
-        <el-select v-model="form.defaultBrowserVersion" clearable placeholder="自动选择" style="width: 100%">
+        <el-select v-model="form.defaultBrowserVersion" placeholder="请选择默认浏览器" style="width: 100%">
           <el-option v-for="b in browsers" :key="b.id" :label="b.label" :value="b.id" />
         </el-select>
+        <div class="hint">默认仍优先使用本机 Google Chrome；下载的 Chrome for Testing 仅作为备用浏览器。</div>
       </el-form-item>
       <el-form-item label="批量启动间隔(ms)">
         <el-input-number v-model="form.launchIntervalMs" :min="0" :step="500" />

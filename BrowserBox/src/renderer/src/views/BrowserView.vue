@@ -60,7 +60,6 @@ async function loadMilestones(): Promise<void> {
     if (!selectedMilestone.value && milestones.value.length) {
       selectedMilestone.value = milestones.value[0].milestone
     }
-    ElMessage.success(`已加载 ${milestones.value.length} 个可用主版本`)
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -84,15 +83,9 @@ async function installSelected(): Promise<void> {
   progress.value = '开始…'
   try {
     const result = await invoke<{ version: string; major: string; exe: string }>('browser:installVersion', target)
-    ElMessage.success(`已安装 ${result.version}`)
+    ElMessage.success(`已安装 ${result.version}，默认仍优先本机 Chrome`)
     await refresh()
     await loadMilestones()
-    // 安装后默认使用 Chrome for Testing 150（若已具备）
-    if (installed.value.some((b) => b.id === '150' || b.major === '150')) {
-      await setDefault('150')
-    } else if (result.major) {
-      await setDefault(result.major)
-    }
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -106,15 +99,10 @@ async function installLatest(): Promise<void> {
   progress.value = '开始…'
   try {
     const result = await invoke<{ version: string; major: string; exe: string }>('browser:installLatest')
-    ElMessage.success(`已安装 ${result.version}`)
+    ElMessage.success(`已安装 ${result.version}，默认仍优先本机 Chrome`)
     selectedMilestone.value = result.major
     await refresh()
-    if (milestones.value.length) await loadMilestones()
-    if (installed.value.some((b) => b.id === '150' || b.major === '150')) {
-      await setDefault('150')
-    } else if (result.major) {
-      await setDefault(result.major)
-    }
+    await loadMilestones()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -155,7 +143,7 @@ onUnmounted(() => {
     <div class="head">
       <div>
         <h2>浏览器管理</h2>
-        <p class="desc">可下载指定主版本的官方 Chrome for Testing，也可使用本机已安装的 Google Chrome</p>
+        <p class="desc">可下载 Chrome for Testing，但默认仍优先使用本机已安装的 Google Chrome</p>
       </div>
     </div>
 
@@ -176,7 +164,7 @@ onUnmounted(() => {
         title="未检测到本机 Google Chrome"
         type="warning"
         :closable="false"
-        description="请先安装 Google Chrome，或改用下方下载 Chrome for Testing。"
+        description="请先安装 Google Chrome，然后再使用本程序。"
         show-icon
       />
     </el-card>
@@ -224,20 +212,16 @@ onUnmounted(() => {
         <el-table-column prop="major" label="标识" width="100" />
         <el-table-column prop="version" label="版本" width="160" />
         <el-table-column prop="path" label="路径" min-width="280" show-overflow-tooltip />
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
-            <el-button
-              link
-              type="primary"
-              :disabled="defaultVersion === row.id"
-              @click="setDefault(row.id)"
-            >
+            <el-button v-if="row.id === 'system'" link type="primary" :disabled="defaultVersion === row.id" @click="setDefault(row.id)">
               {{ defaultVersion === row.id ? '默认' : '设为默认' }}
             </el-button>
+            <el-tag v-else size="small" type="info">仅下载备用</el-tag>
           </template>
         </el-table-column>
       </el-table>
-      <p v-if="!installed.length" class="empty">尚无可用浏览器，请下载 CfT 或安装本机 Google Chrome。</p>
+      <p v-if="!installed.length" class="empty">尚未检测到可用浏览器，请先安装本机 Google Chrome。</p>
     </el-card>
   </div>
 </template>
